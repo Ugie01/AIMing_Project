@@ -1,0 +1,38 @@
+# STM32CubeIDE / Eclipse specific files
+/.metadata/
+/Debug/
+/Release/
+/build/
+*.launch
+*.pydevproject
+.settings/
+.cproject
+.project
+
+# Object and dependency files
+*.o
+*.d
+*.su
+*.cyclo
+
+# Binary and output files
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+
+# Debugging and profiling files
+*.elf.*
+*.gdb
+.gdb_history
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
