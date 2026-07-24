@@ -27,7 +27,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "app_main.h"
+
+#include "app_main.h"  // ai 모델 연동
+#include <stdio.h> // printf 사용을 위해 추가
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,6 +62,24 @@ static void MPU_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+// teleplot에 출력되게 해준다... 
+// printf() 출력을 UART1로 리다이렉션
+int __io_putchar(int ch){
+//  HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, 0xffff);  // oxffff 가장 큰 값이므로 timeout 안 걸리고 사용 가능
+  HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 0xffff);  // oxffff 가장 큰 값이므로 timeout 안 걸리고 사용 가능
+
+  return  ch;
+}
+
+// GCC / CMake 환경 호환성을 위해 _write 함수 재정의
+int _write(int file, char *ptr, int len) {
+  for (int i = 0; i < len; i++) {
+    __io_putchar(*ptr++);
+  }
+  return len;
+}
+
 
 /* USER CODE END 0 */
 
@@ -108,14 +129,30 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-//  HAL_TIM_Base_Start(&htim1);
-  app_main();
+
+  //  HAL_TIM_Base_Start(&htim1);
+  app_main();    // ai, 카메라 연동
+
+  
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+//  uint32_t count = 0;
+
   while (1)
   {
+//    /* 1. LED 점멸 (보드의 실제 LED Port, Pin으로 설정) */
+//    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+//
+//    /* 2. Teleplot 데이터 출력 (형식: >변수명:값\n) */
+//    printf(">counter:%lu\r\n", count++);
+//
+//    /* 3. 500ms 주기 지연 */
+//    HAL_Delay(2000);
+
 
     /* USER CODE END WHILE */
 

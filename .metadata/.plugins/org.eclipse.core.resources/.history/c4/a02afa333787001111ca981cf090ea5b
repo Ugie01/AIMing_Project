@@ -1,0 +1,478 @@
+#include "app_main.h"
+#include "edge-impulse-sdk/classifier/ei_run_classifier.h" // Edge Impulse 핵심 헤더
+#include "test_raw_frame.h" // 새로 생성한 RAW 데이터 헤더 추가
+//#include <string.h>
+//#include <stdarg.h>
+//#include <math.h>
+#include <cstdio>
+#include <cstring>
+#include <cstdarg>
+#include <cmath>
+
+
+extern TIM_HandleTypeDef htim2;
+extern UART_HandleTypeDef huart1;
+//extern I2C_HandleTypeDef hi2c1;
+
+// -----------------------------------------------------------------------------
+// [벤치마크 설정 및 Ground Truth 설정]
+// -----------------------------------------------------------------------------
+// 테스트 RAW 프레임 내 실제 객체의 정답(Ground Truth) 중심 좌표 설정
+#define GT_CENTER_X         48.0f
+#define GT_CENTER_Y         32.0f
+#define DISTANCE_THRESHOLD  10.0f   // GT와 예측 좌표 간 거리(픽셀)가 이 값 이하여야 Detection 성공으로 판정
+//#ifndef EI_CLASSIFIER_RAM_SIZE
+#define EI_CLASSIFIER_RAM_SIZE EI_CLASSIFIER_SLICE_SIZE
+//#endif
+
+
+// RAW 이미지 데이터를 Edge Impulse 모델 버퍼로 공급하는 콜백 함수
+int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
+//    for (size_t i = 0; i < length; i++) {
+//        // 실제 카메라 센서가 없으므로, 테스트를 위해 모든 픽셀을 0으로 채웁니다.
+//        out_ptr[i] = 0.0f;
+//    }
+	for (size_t i = 0; i < length; i++) {
+	        // offset + i 위치의 RAW 픽셀 데이터를 float 형태로 할당
+	        if ((offset + i) < TEST_RAW_PIXEL_COUNT) {
+	            out_ptr[i] = (float)TEST_RAW_DATA[offset + i];
+	        } else {
+	            out_ptr[i] = 0.0f; // 범위 초과 시 예외 처리
+	        }
+	    }
+
+    return 0;
+}
+
+
+
+void UART_Printf(const char* format, ...) {
+    char loc_buf[256];
+    va_list args;
+
+    va_start(args, format);
+    // 가변 인자를 포맷팅하여 버퍼에 문자열로 저장
+    int len = vsnprintf(loc_buf, sizeof(loc_buf), format, args);
+    va_end(args);
+
+    if (len > 0){
+    	HAL_UART_Transmit(&huart1, (uint8_t*)loc_buf, (uint16_t)len, HAL_MAX_DELAY);
+    }
+}
+
+
+// -----------------------------------------------------------------------------
+// [성능 평가 및 시각화 리포트 출력 함수]
+// -----------------------------------------------------------------------------
+// [Main Application Entry Point]
+// app_main.h의 extern "C" 선언에 의해 C-linkage가 자동 적용됨
+// -----------------------------------------------------------------------------
+void app_main(void) {
+    HAL_UART_Transmit(&huart1, (uint8_t*)"[System Ready]\r\n", 16, HAL_MAX_DELAY);
+
+    signal_t signal;
+    signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
+    signal.get_data = &raw_feature_get_data;
+
+    ei_impulse_result_t result = { 0 };
+
+    // 10회 추론 평균 Latency 측정
+    uint32_t total_latency = 0;
+    const int TEST_LOOPS = 10;
+
+    for (int i = 0; i < TEST_LOOPS; i++) {
+        run_classifier(&signal, &result, false);
+        total_latency += result.timing.classification;
+    }
+
+    float avg_latency_ms = static_cast<float>(total_latency) / TEST_LOOPS;
+    float fps = (avg_latency_ms > 0.0f) ? (1000.0f / avg_latency_ms) : 0.0f;
+
+    bool detection_success = false;
+    float best_confidence = 0.0f;
+    float pred_x = 0.0f, pred_y = 0.0f;
+    float pos_error = 999.0f;
+
+#if EI_CLASSIFIER_OBJECT_DETECTION == 1
+    for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+        auto bb = result.bounding_boxes[ix];
+        if (bb.value == 0) continue;
+
+        float cx = bb.x + (bb.width / 2.0f);
+        float cy = bb.y + (bb.height / 2.0f);
+        float dist = std::sqrt(std::pow(cx - GT_CENTER_X, 2) + std::pow(cy - GT_CENTER_Y, 2));
+
+        if (dist < pos_error) {
+            pos_error = dist;
+            pred_x = cx;
+            pred_y = cy;
+            best_confidence = bb.value;
+        }
+    }
+    if (pos_error <= DISTANCE_THRESHOLD) {
+        detection_success = true;
+    }
+#endif
+
+    float success_rate = detection_success ? 100.0f : 0.0f;
+    float ram_kb = static_cast<float>(EI_CLASSIFIER_RAM_SIZE) / 1024.0f;
+
+    // PC 자동 수신 스크립트 트리거용 데이터 출력
+    UART_Printf("[CSV_DATA]%.1f,%.1f,%.1f,%.1f,%.1f,%.2f,%.4f,%.2f,%.2f,%.2f\r\n",
+                success_rate, GT_CENTER_X, GT_CENTER_Y, pred_x, pred_y,
+                pos_error, best_confidence, avg_latency_ms, fps, ram_kb);
+
+    while (1) {
+        HAL_Delay(5000);
+    }
+}
+
+//// C 링크 방식을 강제 지정
+//#ifdef __cplusplus
+//extern "C" {
+//#endif
+//
+//
+//void app_main(void) {
+//    HAL_UART_Transmit(&huart1, (uint8_t*)"[System Ready]\r\n", 16, HAL_MAX_DELAY);
+//
+//    signal_t signal;
+//    signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
+//    signal.get_data = &raw_feature_get_data;
+//
+//    ei_impulse_result_t result = { 0 };
+//
+//    // 10회 추론 후 평균 Latency 산출
+//    uint32_t total_latency = 0;
+//    const int TEST_LOOPS = 10;
+//
+//    for (int i = 0; i < TEST_LOOPS; i++) {
+//        run_classifier(&signal, &result, false);
+//        total_latency += result.timing.classification;
+//    }
+//
+//    float avg_latency_ms = (float)total_latency / TEST_LOOPS;
+//    float fps = (avg_latency_ms > 0) ? (1000.0f / avg_latency_ms) : 0.0f;
+//
+//    bool detection_success = false;
+//    float best_confidence = 0.0f;
+//    float pred_x = 0.0f, pred_y = 0.0f;
+//    float pos_error = 999.0f;
+//
+//#if EI_CLASSIFIER_OBJECT_DETECTION == 1
+//    for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+//        auto bb = result.bounding_boxes[ix];
+//        if (bb.value == 0) continue;
+//
+//        float cx = bb.x + (bb.width / 2.0f);
+//        float cy = bb.y + (bb.height / 2.0f);
+//        float dist = sqrtf(powf(cx - GT_CENTER_X, 2) + powf(cy - GT_CENTER_Y, 2));
+//
+//        if (dist < pos_error) {
+//            pos_error = dist;
+//            pred_x = cx;
+//            pred_y = cy;
+//            best_confidence = bb.value;
+//        }
+//    }
+//    if (pos_error <= DISTANCE_THRESHOLD) detection_success = true;
+//#endif
+//
+//    float success_rate = detection_success ? 100.0f : 0.0f;
+//    float ram_kb = (float)EI_CLASSIFIER_RAM_SIZE / 1024.0f;
+//
+//    // 파이썬 파싱 트리거 태그: [CSV_DATA]
+//    UART_Printf("[CSV_DATA]%.1f,%.1f,%.1f,%.1f,%.1f,%.2f,%.4f,%.2f,%.2f,%.2f\r\n",
+//                success_rate, GT_CENTER_X, GT_CENTER_Y, pred_x, pred_y,
+//                pos_error, best_confidence, avg_latency_ms, fps, ram_kb);
+//
+//    while (1) {
+//        HAL_Delay(5000);
+//    }
+//}
+//
+//
+//#ifdef __cplusplus
+//}
+//#endif
+
+
+
+
+
+
+
+//void app_main(void) {
+//    HAL_UART_Transmit(&huart1, (uint8_t*)"[System Initialization Complete]\r\n", 34, HAL_MAX_DELAY);
+//
+//    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+//    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+//
+//    // 1. 모델 크기 & 메모리 측정 (Edge Impulse SDK 매크로 및 구조체 활용)
+//    size_t model_rom_size = EI_CLASSIFIER_RAW_SAMPLE_COUNT; // 빌드 시 정의된 텐서 및 가중치 크기 기준
+//    size_t ram_usage_bytes = EI_CLASSIFIER_RAM_SIZE;        // 모델 할당 RAM (Tensor Arena)
+//
+//    UART_Printf("\r\n==================================================\r\n");
+//    UART_Printf("      BENCHMARK & EVALUATION FRAMEWORK RUNNING    \r\n");
+//    UART_Printf("==================================================\r\n");
+//
+//    // 2. Inference 실행
+//    signal_t signal;
+//    signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
+//    signal.get_data = &raw_feature_get_data;
+//
+//    ei_impulse_result_t result = { 0 };
+//
+//    // 단발성 정밀 측정을 위해 10회 반복 추론 후 평균 Latency 계산
+//    uint32_t total_latency = 0;
+//    const int TEST_LOOPS = 10;
+//
+//    for (int i = 0; i < TEST_LOOPS; i++) {
+//        run_classifier(&signal, &result, false);
+//        total_latency += result.timing.classification;
+//    }
+//
+//    float avg_latency_ms = (float)total_latency / TEST_LOOPS;
+//    float fps = (avg_latency_ms > 0) ? (1000.0f / avg_latency_ms) : 0.0f;
+//
+//    // 3. 중심점 및 좌표 오차(Distance Error), Success Rate 산출
+//    bool detection_success = false;
+//    float best_confidence = 0.0f;
+//    float pred_x = 0.0f, pred_y = 0.0f;
+//    float pos_error = 999.0f;
+//
+//
+//
+//#if EI_CLASSIFIER_OBJECT_DETECTION == 1
+//    for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+//        auto bb = result.bounding_boxes[ix];
+//        if (bb.value == 0) continue;
+//
+//        float cx = bb.x + (bb.width / 2.0f);
+//        float cy = bb.y + (bb.height / 2.0f);
+//
+//        // Euclidean distance 계산: sqrt((x2-x1)^2 + (y2-y1)^2)
+//        float dist = sqrtf(powf(cx - GT_CENTER_X, 2) + powf(cy - GT_CENTER_Y, 2));
+//
+//        if (dist < pos_error) {
+//            pos_error = dist;
+//            pred_x = cx;
+//            pred_y = cy;
+//            best_confidence = bb.value;
+//        }
+//    }
+//
+//    if (pos_error <= DISTANCE_THRESHOLD) {
+//        detection_success = true;
+//    }
+//#endif
+//
+//    float success_rate = detection_success ? 100.0f : 0.0f;
+//
+//    // -------------------------------------------------------------------------
+//    // [1] 콘솔 정밀 벤치마크 리포트 출력
+//    // -------------------------------------------------------------------------
+//    UART_Printf("\r\n--- [1] QUANTITATIVE BENCHMARK REPORT ---\r\n");
+//    UART_Printf(" 1. Detection Success Rate : %.1f %%\r\n", success_rate);
+//    UART_Printf(" 2. Ground Truth Pos (X,Y) : (%.1f, %.1f)\r\n", GT_CENTER_X, GT_CENTER_Y);
+//    UART_Printf("    Predicted Pos (X,Y)    : (%.1f, %.1f)\r\n", pred_x, pred_y);
+//    UART_Printf("    Center Pos Error       : %.2f pixels\r\n", pos_error);
+//    UART_Printf(" 3. Confidence Score       : %.4f (%.1f %%)\r\n", best_confidence, best_confidence * 100.0f);
+//    UART_Printf(" 4. Inference Latency      : %.2f ms\r\n", avg_latency_ms);
+//    UART_Printf(" 5. Performance (FPS)      : %.2f FPS\r\n", fps);
+//    UART_Printf(" 6. Model ROM Size         : %u KB\r\n", (unsigned int)(model_rom_size / 1024));
+//    UART_Printf(" 7. Peak RAM Usage         : %.2f KB\r\n", (float)ram_usage_bytes / 1024.0f);
+//
+//    // -------------------------------------------------------------------------
+//    // [2] CSV 로그 저장 및 파싱용 표준 텍스트 데이터 Output
+//    // (PC 시리얼 로그를 파일로 저장할 때 바로 .csv 변환 가능)
+//    // -------------------------------------------------------------------------
+//    UART_Printf("\r\n--- [2] CSV DATA LOG (COPY TO FILE) ---\r\n");
+//    UART_Printf("SuccessRate(%%),GT_X,GT_Y,Pred_X,Pred_Y,PixelError,Confidence,Latency(ms),FPS,RAM_KB\r\n");
+//    UART_Printf("%.1f,%.1f,%.1f,%.1f,%.1f,%.2f,%.4f,%.2f,%.2f,%.2f\r\n",
+//                success_rate, GT_CENTER_X, GT_CENTER_Y, pred_x, pred_y,
+//                pos_error, best_confidence, avg_latency_ms, fps, (float)ram_usage_bytes / 1024.0f);
+//
+//    // -------------------------------------------------------------------------
+//    // [3] Terminal ASCII 기반 시각화 (Visualization Data)
+//    // - 파이프라인 시각화 및 오차 그리드 맵
+//    // -------------------------------------------------------------------------
+//    UART_Printf("\r\n--- [3] VISUALIZATION: CENTROID POSITIONAL ERROR MAP ---\r\n");
+//    UART_Printf(" Grid Size: 10x10 (G: Ground Truth, P: Prediction, X: Overlap)\r\n\n");
+//
+//    int grid_size = 10;
+//    int gt_gx = (int)(GT_CENTER_X / 6.4f); // 64x64 또는 해상도 기준 축척 조정
+//    int pred_gx = (int)(pred_x / 6.4f);
+//    int gt_gy = (int)(GT_CENTER_Y / 6.4f);
+//    int pred_gy = (int)(pred_y / 6.4f);
+//
+//    for (int y = 0; y < grid_size; y++) {
+//        UART_Printf("  |");
+//        for (int x = 0; x < grid_size; x++) {
+//            if (x == gt_gx && y == gt_gy && x == pred_gx && y == pred_gy) {
+//                UART_Printf(" X "); // 정답과 예측이 완벽히 일치
+//            } else if (x == gt_gx && y == gt_gy) {
+//                UART_Printf(" G "); // Ground Truth
+//            } else if (x == pred_gx && y == pred_gy) {
+//                UART_Printf(" P "); // Prediction
+//            } else {
+//                UART_Printf(" . ");
+//            }
+//        }
+//        UART_Printf("|\r\n");
+//    }
+//
+//    UART_Printf("\r\n--- BENCHMARK COMPLETE ---\r\n");
+//
+//    while (1) {
+//        // 단발성 테스트 완료 후 대기
+//        HAL_Delay(10000);
+//    }
+//}
+
+
+
+
+
+
+//// C++ 메인 함수 구현
+//void app_main(void) {
+//	HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, HAL_MAX_DELAY);
+//
+//	UART_Printf("\n\n--- Edge Impulse FOMO Model Inference Test ---\n");
+//
+//    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+//    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+//
+//    while (1) {
+//    	UART_Printf("Running inference...\r\n");
+//
+//		  // 2. 모델에 데이터를 공급할 Signal 구조체 설정
+//		  signal_t signal;
+//		  signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
+//		  signal.get_data = &raw_feature_get_face_data;
+//
+//		  // 3. 결과값을 저장할 구조체 초기화
+//		  ei_impulse_result_t result = { 0 };
+//
+//		  // 4. 추론(Inference) 실행!
+//		  EI_IMPULSE_ERROR res = run_classifier(&signal, &result, false);
+//		  if (res != 0) {
+//			  UART_Printf("Failed to run classifier (Error code: %d)\r\n", res);
+//			  HAL_Delay(1000);
+//			  continue;
+//		  }
+//
+////		  // 5. 추론 성능(타이밍) 출력
+////		  // - 실행 시간(타이밍) 출력 (STM32H7의 480MHz 파워를 확인할 수 있습니다)
+//////		  UART_Printf("Timing: DSP %d ms, inference %d ms\r\n",
+//////		  				  	  result.timing.dsp,
+//////		  					  result.timing.classification);
+////		  UART_Printf("Timing: DSP %d ms, inference %d ms\r\n",
+////				  	  result.timing.dsp,
+////					  result.timing.classification,
+////					  result.timing.anomaly);
+//
+//		  // 5. 성능(속도/시간) 출력 (DSP, Pure Inference, Total)
+//		  uint32_t total_time = result.timing.dsp + result.timing.classification + result.timing.anomaly;
+//		  UART_Printf("[Performance] DSP: %d ms | Inference: %d ms | Total Latency: %d ms\r\n",
+//					  result.timing.dsp,
+//					  result.timing.classification,
+//					  total_time);
+//
+//
+////		  // 6. FOMO 객체 인식 결과(Bounding Boxes) 출력
+////#if EI_CLASSIFIER_OBJECT_DETECTION == 1
+////        bool object_detected = false;
+////        for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+////            auto bb = result.bounding_boxes[ix];
+////            if (bb.value == 0) {
+////                continue; // 확신도(Confidence) 0인 빈 영역은 건너뜀
+////            }
+////            UART_Printf("Found '%s' (%.2f) at x: %ld, y: %ld, w: %ld, h: %ld\r\n",
+////                        bb.label, bb.value, bb.x, bb.y, bb.width, bb.height);
+////            object_detected = true;
+////        }
+////
+////        if (!object_detected) {
+////            UART_Printf("No objects found in this frame.\r\n");
+////        }
+////#else
+////        // 분류(Classification) 모델 출력
+////        for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
+////            UART_Printf("    %s: %.5f\r\n", result.classification[ix].label, result.classification[ix].value);
+////        }
+////#endif
+////
+////        UART_Printf("---------------------------------------\r\n");
+////
+////        // 2초 간격으로 추론 반복 테스트
+////        HAL_Delay(2000);
+//
+//
+//
+////		  bool object_detected = false;
+////		  for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+////			  auto bb = result.bounding_boxes[ix];
+////			  if (bb.value == 0) {
+////				  continue; // 확신도(Confidence)가 0인 빈 그리드는 건너뜀
+////			  }
+////			  UART_Printf("Found '%s' (%.2f) at x: %ld, y: %ld, w: %ld, h: %ld\r\n",
+////						bb.label, bb.value, bb.x, bb.y, bb.width, bb.height);
+////			  object_detected = true;
+////		  }
+////
+////		  if (!object_detected) {
+////			  UART_Printf("No objects found in this frame.\r\n");
+////		  }
+////
+////		  UART_Printf("---------------------------------------\r\n");
+////
+////		  // 2초 대기 후 다시 추론 반복
+////		  HAL_Delay(2000);
+//
+//
+//
+//		  // 6. FOMO 중심 좌표(Centroid) 및 확신도(Confidence Score) 출력
+//#if EI_CLASSIFIER_OBJECT_DETECTION == 1
+//	  uint32_t detected_count = 0;
+//
+//	  for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+//		  auto bb = result.bounding_boxes[ix];
+//
+//		  // 확신도가 0이거나 기준치 미만인 배경 그리드는 스킵
+//		  if (bb.value == 0) {
+//			  continue;
+//		  }
+//
+//		  // FOMO 중심점 좌표 계산 (x + w/2, y + h/2 또는 x, y 자체 활용)
+//		  uint32_t center_x = bb.x + (bb.width / 2);
+//		  uint32_t center_y = bb.y + (bb.height / 2);
+//
+//		  UART_Printf("  -> DETECTED [%s] Score: %.3f | Center Pos (X, Y): (%lu, %lu)\r\n",
+//					  bb.label, bb.value, center_x, center_y);
+//
+//		  detected_count++;
+//	  }
+//
+//	  if (detected_count == 0) {
+//		  UART_Printf("  -> Result: No targets detected in test frame.\r\n");
+//	  } else {
+//		  UART_Printf("  -> Total Detected Centroids: %lu\r\n", detected_count);
+//	  }
+//#else
+//	  // Classification fallback
+//	  for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
+//		  UART_Printf("    %s: %.5f\r\n", result.classification[ix].label, result.classification[ix].value);
+//	  }
+//#endif
+//
+//	  UART_Printf("--------------------------------------------------\r\n");
+//
+//	  // 2초 간격으로 반복 측정
+//	  HAL_Delay(2000);
+//
+//
+//
+//    }
+//}
