@@ -53,7 +53,7 @@
 osThreadId_t VisionTaskHandle;
 const osThreadAttr_t VisionTask_attributes = {
   .name = "VisionTask",
-  .stack_size = 4096 * 4,
+  .stack_size = 8192 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for MotorTask */
