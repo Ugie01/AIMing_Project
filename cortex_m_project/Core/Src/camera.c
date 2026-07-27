@@ -17,7 +17,7 @@
 ALIGN_32BYTES(uint16_t frame_buffer[FRAME_PIXELS]);
 
 volatile uint8_t frame_ready = 0;
-uint8_t current_mode = 0; // 0: Grayscale, 1: RGB
+uint8_t current_mode = 1; // 0: Grayscale, 1: RGB
 
 // --------------------------------------------------
 // 카메라 DMA 캡처 시작 함수
@@ -30,6 +30,8 @@ void Camera_StartCapture(void) {
 // --------------------------------------------------
 // 카메라 모드 설정 함수
 // --------------------------------------------------
+
+// yuv 모드
 void Camera_SetMode(uint8_t is_rgb) {
 	current_mode = is_rgb;
 
@@ -41,6 +43,34 @@ void Camera_SetMode(uint8_t is_rgb) {
 		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_BW, 0);
 	}
 }
+
+//// rgb565 모드
+//void Camera_SetMode(uint8_t is_rgb) {
+//	current_mode = is_rgb;
+//
+//	// DSP 레지스터 락 해제
+//	CAMERA_IO_Write(0x60, 0xff, 0x00);
+//	CAMERA_IO_Write(0x60, 0x28, 0x01); // OV2640_DSP_RA_DLMT
+//
+//	if (current_mode == 1) {
+//		// 1. 센서 출력 포맷을 RGB565로 설정 (COM7 레지스터 0x12: RGB565 설정 비트 적용)
+//		uint8_t com7 = CAMERA_IO_Read(0x60, 0x12);
+//		com7 = (com7 & 0xDF) | 0x04; // RGB 모드 활성화 (Bit 3: RGB, Bit 5: 0 등 센서 스펙 반영)
+//		// 관례적으로 OV2640에서 RGB565는 COM7[3]=1, COM7[2]=0 조합 등을 사용합니다.
+//		// 확실한 RGB565 전환을 위해 레지스터 직접 지정:
+//		CAMERA_IO_Write(0x60, 0x12, 0x04); // 0x04 또는 해상도별 RGB 설정값
+//
+//		// 컬러 모드 노멀 설정
+//		ov2640_Config(0x60, CAMERA_BLACK_WHITE,
+//				CAMERA_BLACK_WHITE_NORMAL, 0);
+//	} else {
+//		// 흑백 모드 (YUV 기반 혹은 흑백 이펙트)
+//		CAMERA_IO_Write(0x60, 0x12, 0x00); // YUV/Default
+//		ov2640_Config(0x60, CAMERA_BLACK_WHITE,
+//				CAMERA_BLACK_WHITE_BW, 0);
+//	}
+//}
+
 
 // --------------------------------------------------
 // 파이썬 뷰어로 1프레임 데이터 전송 함수

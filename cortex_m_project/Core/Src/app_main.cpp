@@ -8,6 +8,7 @@
 #include <stdio.h>  // vsprintf 사용을 위해 추가
 #include "ov2640.h"
 #include "camera.h"
+#include "display.h"
 
 extern TIM_HandleTypeDef htim2;
 extern UART_HandleTypeDef huart1;
@@ -16,25 +17,26 @@ extern DCMI_HandleTypeDef hdcmi;
 
 #define OV2640_I2C_ADDR (0x30 << 1)  // 8비트 기준 Write 주소
 
-#define FEATURE_W     96
-#define FEATURE_H     96
-#define FEATURE_SIZE  (FEATURE_W * FEATURE_H)
+#define CROP_W     96
+#define CROP_H     96
+#define CROP_SIZE  (FEATURE_W * FEATURE_H)
+static float ai_input_features[CROP_W * CROP_H];
 
 extern const float test_features1[];
 extern const float test_features2[];
 
 
 int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
-    for (size_t i = 0; i < length; i++) {
-        // 실제 카메라 센서가 없으므로, 테스트를 위해 모든 픽셀을 0으로 채웁니다.
-        out_ptr[i] = 0.0f;
-    }
+	for (size_t i = 0; i < length; i++) {
+		out_ptr[i] = ai_input_features[offset + i];
+	}
     return 0;
 }
 
 int raw_feature_get_face_data(size_t offset, size_t length, float *out_ptr) {
     for (size_t i = 0; i < length; i++) {
         // test_features 배열에서 데이터를 가져와서 모델에 공급
+//        out_ptr[i] = test_features1[offset + i];
         out_ptr[i] = test_features2[offset + i];
     }
     return 0;
@@ -53,23 +55,45 @@ void UART_Printf(const char *format, ...) {
 		HAL_MAX_DELAY);
 }
 
-static void Send_FeaturesToPC(void) {
-	uint8_t start_msg[] = "---START---\r\n";
-	HAL_UART_Transmit(&huart1, start_msg, sizeof(start_msg) - 1, HAL_MAX_DELAY);
+//static void Send_FeaturesToPC(void) {
+//	uint8_t start_msg[] = "---START---\r\n";
+//	HAL_UART_Transmit(&huart1, start_msg, sizeof(start_msg) - 1, HAL_MAX_DELAY);
+//
+//	HAL_UART_Transmit(&huart1, (uint8_t*) test_features1,
+//	FEATURE_SIZE * sizeof(uint32_t), HAL_MAX_DELAY);
+//}
 
-	HAL_UART_Transmit(&huart1, (uint8_t*) test_features1,
-	FEATURE_SIZE * sizeof(uint32_t), HAL_MAX_DELAY);
+// 카메라 원본(frame_buffer)에서 정중앙 96x96을 크롭하여 AI 입력용 float 배열로 변환하는 함수
+void Get_Cropped_AI_Features(const uint16_t *src_image, float *out_features) {
+	uint16_t start_x = (FRAME_W - CROP_W) / 2; // (160 - 96) / 2 = 32
+	uint16_t start_y = (FRAME_H - CROP_H) / 2; // (120 - 96) / 2 = 12
+
+	const uint8_t *p_bytes = (const uint8_t*) src_image;
+
+	for (int y = 0; y < CROP_H; y++) {
+		for (int x = 0; x < CROP_W; x++) {
+			uint32_t src_x = start_x + x;
+			uint32_t src_y = start_y + y;
+			uint32_t src_index = (src_y * FRAME_W) + src_x;
+
+			// 기존 그레이스케일 추출 방식 적용 (모드에 따라 맞게 조절 가능)
+			uint8_t y_val = p_bytes[src_index * 2U + 1U];
+
+			// AI 모델에 맞게 0.0f ~ 255.0f 또는 0.0f ~ 1.0f로 정규화하여 대입
+			out_features[y * CROP_W + x] = (float) y_val;
+		}
+	}
 }
 
 extern "C" {
 
 void VisionTask(void) {
-	// 하드웨어 내부 초기화
+	// 하드웨어 리셋
 	HAL_GPIO_WritePin(CAM_PWDN_GPIO_Port, CAM_PWDN_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_RESET);
-	osDelay(100);
+	osDelay(30);
 	HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_SET);
-	osDelay(100);
+	osDelay(20);
 
 	// BSP 함수로 ID 읽기 테스트
 	uint16_t pid = ov2640_ReadID(OV2640_I2C_ADDR);
@@ -93,22 +117,95 @@ void VisionTask(void) {
 	UART_Printf(" VisionTask Running inference...\r\n");
 	UBaseType_t vision_stack = uxTaskGetStackHighWaterMark(NULL);
 
+	if (Display_Init() != HAL_OK) {
+		Error_Handler();
+	}
+
 	// FPS 측정을 위한 변수 추가
 	uint32_t frame_count = 0;
 	uint32_t last_tick = HAL_GetTick();
 
 	for (;;) {
+//		// 기존 코드
+//		if (frame_ready) {
+//			UART_Printf("VisionTask Stack Free: %lu Words (%lu Bytes)\r\n",
+//					vision_stack, vision_stack * 4);
+//			frame_count++;      // 프레임 카운트 증가
+//			frame_ready = 0;    // 플래그 초기화
+//			Camera_SendFrameToPC();
+//		}
+//
+//		if (hdcmi.State == HAL_DCMI_STATE_ERROR) {
+//			HAL_DCMI_Stop(&hdcmi);
+//			hdcmi.State = HAL_DCMI_STATE_READY;
+//			frame_ready = 0;
+//			Camera_StartCapture();
+//		}
+//
+//		// 1초(1000ms)마다 FPS 출력
+//		uint32_t current_tick = HAL_GetTick();
+//		if (current_tick - last_tick >= 1000) {
+//			UART_Printf("Current FPS: %lu\r\n", frame_count);
+//			frame_count = 0;          // 카운트 리셋
+//			last_tick = current_tick; // 시간 갱신
+//		}
+//
+//		osDelay(1); // 반응성을 높이기 위해 딜레이를 1ms로 줄임 (기존 10ms)
+
 		if (frame_ready) {
 			UART_Printf("VisionTask Stack Free: %lu Words (%lu Bytes)\r\n",
 					vision_stack, vision_stack * 4);
 			frame_count++;      // 프레임 카운트 증가
 			frame_ready = 0;    // 플래그 초기화
-//			Camera_SendFrameToPC();
+
+			// D-Cache Clean (Flush)
+			SCB_InvalidateDCache_by_Addr((uint32_t*) frame_buffer, FRAME_BYTES);
+
+			// Raw 이미지 데이터 전송 (160 * 120 * 2 = 38,400 bytes)
+			if (Display_UpdateImage(frame_buffer, FRAME_W,
+			FRAME_H) != HAL_OK) {
+				Error_Handler();
+			}
+
+			// 3. [AI용 크롭] 카메라 원본에서 중앙 96x96을 잘라내어 AI 버퍼에 준비
+			Get_Cropped_AI_Features(frame_buffer, ai_input_features);
+
+			// 4. [AI 추론 실행] (Edge Impulse 등)
+			signal_t signal;
+			signal.total_length = CROP_W * CROP_H; // 9216
+			signal.get_data = &raw_feature_get_data;
+
+			ei_impulse_result_t result = { 0 };
+			EI_IMPULSE_ERROR res = run_classifier(&signal, &result, false);
+
+			if (res == 0) {
+				// 추론 결과 활용 (Bounding Box 등)
+				UART_Printf("Timing: DSP %d ms, inference %d ms\r\n",
+						result.timing.dsp, result.timing.classification);
+				bool object_detected = false;
+				for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+					auto bb = result.bounding_boxes[ix];
+					if (bb.value == 0) {
+						continue; // 확신도(Confidence)가 0인 빈 그리드는 건너뜀
+					}
+					UART_Printf(
+							"Found '%s' (%.2f) at x: %ld, y: %ld, w: %ld, h: %ld\r\n",
+							bb.label, bb.value, bb.x, bb.y, bb.width,
+							bb.height);
+					object_detected = true;
+				}
+
+				if (!object_detected) {
+					UART_Printf("No objects found in this frame.\r\n");
+				}
+			}
+
+			Camera_StartCapture();
+
 		}
 
 		if (hdcmi.State == HAL_DCMI_STATE_ERROR) {
-			UART_Printf("DCMI Error Occurred! Restarting...\r\n"); // 로그 추가
-			HAL_DCMI_Stop (&hdcmi);
+			HAL_DCMI_Stop(&hdcmi);
 			hdcmi.State = HAL_DCMI_STATE_READY;
 			frame_ready = 0;
 			Camera_StartCapture();
@@ -122,7 +219,7 @@ void VisionTask(void) {
 			last_tick = current_tick; // 시간 갱신
 		}
 
-		osDelay(1); // 반응성을 높이기 위해 딜레이를 1ms로 줄임 (기존 10ms)
+		osDelay(1);
 
 ////       모델에 데이터를 공급할 Signal 구조체 설정
 //		signal_t signal;
@@ -163,6 +260,7 @@ void VisionTask(void) {
 //
 //		UART_Printf("---------------------------------------\r\n");
 ////       카메라 영상 가져오기 -> AI 추론 -> 큐에 좌표 전송
+//		osDelay(10); // 임시 딜레이
 	}
 }
 
