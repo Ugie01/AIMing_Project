@@ -16,6 +16,7 @@ def main():
     p.setGravity(0, 0, -9.81)
     p.loadURDF("plane.urdf")
 
+    
     #============================================================
     # 초록색 타겟을 초기 랜덤 위치에 생성하고 ID를 반환받음
     # 초록색 네모
@@ -52,7 +53,7 @@ def main():
     target_visual = p.createVisualShape(
         p.GEOM_BOX, 
         halfExtents=[0.25, 0.125, 0.85],  # 👈 이 부분을 원하는 크기의 절반 값으로 수정
-        rgbaColor=[0, 1, 0, 1]
+        rgbaColor=[1, 0, 0, 1]
     )
     targetId = p.createMultiBody(
         baseMass=0.0,
@@ -161,7 +162,7 @@ def main():
                 view_matrix = p.computeViewMatrix(cameraEyePosition=cam_pos, cameraTargetPosition=cam_target, cameraUpVector=cam_up)
                 proj_matrix = p.computeProjectionMatrixFOV(fov=68, aspect=1.0, nearVal=0.1, farVal=100.0)
 
-                width, height, rgbImg, _, _ = p.getCameraImage(width=320, height=320, viewMatrix=view_matrix, projectionMatrix=proj_matrix)
+                width, height, rgbImg, _, _ = p.getCameraImage(width=160, height=120, viewMatrix=view_matrix, projectionMatrix=proj_matrix)
                 frame = np.reshape(rgbImg, (height, width, 4)).astype(np.uint8)
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
 
@@ -169,6 +170,10 @@ def main():
                 has_target, pan_adj, tilt_adj, processed_frame = tracker.process_frame(frame)
                 error_x = getattr(tracker, 'last_error_x', 0.0)
                 error_y = getattr(tracker, 'last_error_y', 0.0)
+
+                # 💡 VisionTracker 객체에서 계산된 값들을 바로 가져옴 (최소 수정)
+                current_speed = getattr(tracker, 'current_speed', 0.0)
+                current_conf = getattr(tracker, 'confidence', 0.0)
 
                 # ==========================================
                 #  비전 도메인 노이즈 주입 (Gaussian Noise)
@@ -210,23 +215,24 @@ def main():
                     mode_text = "MODE: MANUAL" if not auto_tracking else "MODE: AUTO (TARGET LOST)"
                     cv2.putText(processed_frame, mode_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-                # 5. 디버그 전용 대시보드 갱신
-                debug_board = np.zeros((220, 450, 3), dtype=np.uint8)
+                debug_board = np.zeros((280, 450, 3), dtype=np.uint8)
                 texts = [
                     f"[STM32 + SG90 + 30g Dynamics]",
                     f"  KP: {current_kp:.5f} | KI: {current_ki:.5f} | KD: {current_kd:.5f}",
-                    f"[Error Values]",
+                    f"[System Status]",
+                    f"  Mode   : {'AUTO TRACKING' if auto_tracking else 'MANUAL'} (Target: {has_target})",
+                    f"  Conf   : {current_conf:.2f}",
+                    f"[Target Motion & Error]",
+                    f"  Speed  : {current_speed:.1f} px/s",
                     f"  Error X: {error_x:.2f} px | Error Y: {error_y:.2f} px",
                     f"[Motor Outputs]",
-                    f"  Pan Adj: {pan_adj:.5f}   | Tilt Adj: {tilt_adj:.5f}",
-                    f"[Status]",
-                    f"  Mode: {'AUTO TRACKING' if auto_tracking else 'MANUAL'} (Target: {has_target})"
+                    f"  Pan Adj: {pan_adj:.5f}   | Tilt Adj: {tilt_adj:.5f}"
                 ]
 
                 y_offset = 25
                 for t in texts:
                     color = (0, 255, 0) if "AUTO" in t or t.startswith("[") else (255, 255, 255)
-                    cv2.putText(debug_board, t, (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                    cv2.putText(debug_board, t, (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
                     y_offset += 22
 
                 cv2.imshow(cam_window_name, processed_frame)

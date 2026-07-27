@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 from PIL import Image, ImageDraw
 
 # --- 1단계: 시뮬레이션 맞춤형 데이터셋 생성 및 폴더 분할 저장 (지평선 배경 + 부정 샘플 30%) ---
-def create_or_verify_dataset(dataset_dir="./synthetic_green_dataset", num_samples=2500, img_size=95):
+def create_or_verify_dataset(dataset_dir="./synthetic_red_dataset", num_samples=2500, img_size=95):
     test_img_dir = os.path.join(dataset_dir, "test", "images")
     if os.path.exists(test_img_dir) and len(os.listdir(test_img_dir)) > 0:
         print("📦 [1단계] 기존에 분할된 데이터셋이 존재합니다. 로드를 진행합니다.")

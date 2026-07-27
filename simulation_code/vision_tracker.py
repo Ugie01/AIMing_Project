@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import tensorflow as tf
+import time
 
 
 class PIDController:
@@ -29,7 +30,7 @@ class VisionTracker:
 
   def __init__(
       self,
-      model_path="green_detector.tflite",
+      model_path="simulation_code/red_detector.tflite",
       kp=0.001,
       ki=0.0,
       kd=0.0002,
@@ -53,6 +54,12 @@ class VisionTracker:
     # 모델 입력 크기 확인 (예: [1, 95, 95, 3])
     self.input_shape = self.input_details[0]["shape"]
     self.model_img_size = self.input_shape[1]  # 95
+
+    # --- [속도 계산을 위한 변수 초기화] ---
+    self.prev_cx = None
+    self.prev_cy = None
+    self.prev_time = None
+    self.current_speed = 0.0  # 픽셀/초 단위 속도
 
   def process_frame(self, frame):
     """프레임을 모델 입력 크기(95x95)로 전처리 후 TFLite 추론 수행 (신뢰도 항상 표시, 0.8 이상만 제어)"""
@@ -94,6 +101,20 @@ class VisionTracker:
     # 3. 신뢰도가 0.6 이상일 때만 타겟 포착 및 PID 제어 수행
     if confidence >= 0.6:
       has_target = True
+
+      # --- [속도 계산 로직] ---
+      current_time = time.time()
+      if self.prev_cx is not None and self.prev_time is not None:
+        dt = current_time - self.prev_time
+        if dt > 0:
+          # 유클리드 거리 공식으로 픽셀 이동량 계산
+          pixel_distance = np.sqrt((best_cx - self.prev_cx) ** 2 + (best_cy - self.prev_cy) ** 2)
+          self.current_speed = pixel_distance / dt  # pixel / sec
+
+      # 현재 좌표와 시간을 다음 비교를 위해 저장
+      self.prev_cx = best_cx
+      self.prev_cy = best_cy
+      self.prev_time = current_time
       
       img_center_x = orig_width // 2
       img_center_y = orig_height // 2
@@ -122,16 +143,26 @@ class VisionTracker:
           2,
       )
 
-    # 4. 신뢰도 값은 타겟 유무와 상관없이 '항상' 검은색((0, 0, 0))으로 화면에 출력
-    cv2.putText(
-        frame,
-        f"Conf: {confidence:.2f}",
-        (10, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 0, 0),  # 검은색
-        2,
-    )
+    # # 4. 신뢰도 값은 타겟 유무와 상관없이 '항상' 검은색((0, 0, 0))으로 화면에 출력
+    # cv2.putText(
+    #     frame,
+    #     f"Conf: {confidence:.2f}",
+    #     (10, 30),
+    #     cv2.FONT_HERSHEY_SIMPLEX,
+    #     0.6,
+    #     (0, 0, 0),  # 검은색
+    #     2,
+    # )
+    # # 화면에 신뢰도 및 계산된 속도(px/s) 출력
+    # cv2.putText(
+    #     frame,
+    #     f"Conf: {confidence:.2f} | Speed: {self.current_speed:.1f} px/s",
+    #     (10, 30),
+    #     cv2.FONT_HERSHEY_SIMPLEX,
+    #     0.5,
+    #     (0, 0, 0),  
+    #     2,
+    # )
 
     # 화면 중앙 십자가 기준선 표시
     cv2.line(frame, (orig_width // 2, 0), (orig_width // 2, orig_height), (255, 255, 255), 1)
