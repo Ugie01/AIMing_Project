@@ -35,7 +35,6 @@ int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
 int raw_feature_get_face_data(size_t offset, size_t length, float *out_ptr) {
     for (size_t i = 0; i < length; i++) {
         // test_features 배열에서 데이터를 가져와서 모델에 공급
-//        out_ptr[i] = test_features1[offset + i];
         out_ptr[i] = test_features2[offset + i];
     }
     return 0;
@@ -65,12 +64,12 @@ static void Send_FeaturesToPC(void) {
 extern "C" {
 
 void VisionTask(void) {
-	// 하드웨어 리셋
+	// 하드웨어 내부 초기화
 	HAL_GPIO_WritePin(CAM_PWDN_GPIO_Port, CAM_PWDN_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_RESET);
-	osDelay(30);
+	osDelay(100);
 	HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_SET);
-	osDelay(20);
+	osDelay(100);
 
 	// BSP 함수로 ID 읽기 테스트
 	uint16_t pid = ov2640_ReadID(OV2640_I2C_ADDR);
@@ -94,20 +93,36 @@ void VisionTask(void) {
 	UART_Printf(" VisionTask Running inference...\r\n");
 	UBaseType_t vision_stack = uxTaskGetStackHighWaterMark(NULL);
 
+	// FPS 측정을 위한 변수 추가
+	uint32_t frame_count = 0;
+	uint32_t last_tick = HAL_GetTick();
 
 	for (;;) {
 		if (frame_ready) {
 			UART_Printf("VisionTask Stack Free: %lu Words (%lu Bytes)\r\n",
 					vision_stack, vision_stack * 4);
-			Camera_SendFrameToPC();
+			frame_count++;      // 프레임 카운트 증가
+			frame_ready = 0;    // 플래그 초기화
+//			Camera_SendFrameToPC();
 		}
 
 		if (hdcmi.State == HAL_DCMI_STATE_ERROR) {
+			UART_Printf("DCMI Error Occurred! Restarting...\r\n"); // 로그 추가
 			HAL_DCMI_Stop (&hdcmi);
 			hdcmi.State = HAL_DCMI_STATE_READY;
 			frame_ready = 0;
 			Camera_StartCapture();
 		}
+
+		// 1초(1000ms)마다 FPS 출력
+		uint32_t current_tick = HAL_GetTick();
+		if (current_tick - last_tick >= 1000) {
+			UART_Printf("Current FPS: %lu\r\n", frame_count);
+			frame_count = 0;          // 카운트 리셋
+			last_tick = current_tick; // 시간 갱신
+		}
+
+		osDelay(1); // 반응성을 높이기 위해 딜레이를 1ms로 줄임 (기존 10ms)
 
 ////       모델에 데이터를 공급할 Signal 구조체 설정
 //		signal_t signal;
@@ -148,7 +163,6 @@ void VisionTask(void) {
 //
 //		UART_Printf("---------------------------------------\r\n");
 ////       카메라 영상 가져오기 -> AI 추론 -> 큐에 좌표 전송
-		osDelay(10); // 임시 딜레이
 	}
 }
 

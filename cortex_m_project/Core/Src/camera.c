@@ -23,7 +23,7 @@ uint8_t current_mode = 0; // 0: Grayscale, 1: RGB
 // 카메라 DMA 캡처 시작 함수
 // --------------------------------------------------
 void Camera_StartCapture(void) {
-	HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_SNAPSHOT, (uint32_t) frame_buffer,
+	HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_CONTINUOUS, (uint32_t) frame_buffer,
 	FRAME_WORDS);
 }
 

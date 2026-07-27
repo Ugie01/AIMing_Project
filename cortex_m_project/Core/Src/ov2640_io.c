@@ -10,9 +10,27 @@
 
 #include "ov2640.h"
 #include "i2c.h" // hi2c1 사용
+#include <stdarg.h> // va_list 사용을 위해 추가
+#include <stdio.h>  // vsprintf 사용을 위해 추가
+#include "main.h"
 
+extern UART_HandleTypeDef huart1;
+extern I2C_HandleTypeDef hi2c1;
 // OV2640 I2C 7-bit 주소 (0x30) -> 8-bit Shift (0x60)
 #define OV2640_I2C_ADDRESS  (0x30 << 1)
+
+void UART_Printf(const char *format, ...) {
+	char loc_buf[256];
+	va_list args;
+
+	va_start(args, format);
+	int len = vsnprintf(loc_buf, sizeof(loc_buf), format, args);
+	va_end(args);
+
+	if (len > 0)
+		HAL_UART_Transmit(&huart1, (uint8_t*) loc_buf, (uint16_t) len,
+		HAL_MAX_DELAY);
+}
 
 void CAMERA_IO_Init(void) {
 	// CubeMX MX_I2C1_Init()에서 이미 하드웨어를 초기화하므로 비워두어도 됩니다.
@@ -20,8 +38,12 @@ void CAMERA_IO_Init(void) {
 
 void CAMERA_IO_Write(uint8_t addr, uint8_t reg, uint8_t value) {
 	// addr 인자는 BSP 드라이버에서 넘어오지만 safety 차원에서 8bit 변환 주소 사용
-	HAL_I2C_Mem_Write(&hi2c1, OV2640_I2C_ADDRESS, reg, I2C_MEMADD_SIZE_8BIT,
+	HAL_StatusTypeDef status = HAL_I2C_Mem_Write(&hi2c1, OV2640_I2C_ADDRESS,
+			reg, I2C_MEMADD_SIZE_8BIT,
 			&value, 1, 100);
+	if (status != HAL_OK) {
+		UART_Printf("I2C Write Error! Reg: 0x%02X\r\n", reg);
+	}
 }
 
 uint8_t CAMERA_IO_Read(uint8_t addr, uint8_t reg) {
