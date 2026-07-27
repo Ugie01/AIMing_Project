@@ -40,7 +40,7 @@ int main(void)
   while (1)
   {
       // 매 20ms마다 각도 단위(예: 중앙 0도, 0도)를 타겟으로 주고 PID 제어 실행
-      Motor_Angle_Process(&pan_pid, &tilt_pid, &htim2, 0.0f, 0.0f);
+      Motor_PID_Process(&pan_pid, &tilt_pid, &htim2);
 
       // 서보모터 표준 제어 주기 (20ms)
       HAL_Delay(20);
