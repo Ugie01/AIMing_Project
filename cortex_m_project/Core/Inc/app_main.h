@@ -12,6 +12,11 @@ extern "C" {
  * @brief C++ 애플리케이션 진입점 함수
  */
 void app_main(void);
+void VisionTask(void);
+void MotorTask(void);
+
+extern const float test_features1[];
+extern const float test_features2[];
 
 #ifdef __cplusplus
 }
