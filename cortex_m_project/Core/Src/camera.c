@@ -5,9 +5,6 @@
  *      Author: KCCISTC
  */
 
-
-
-
 #include "camera.h"
 #include "ov2640.h"
 #include "dcmi.h"
@@ -17,29 +14,59 @@
 ALIGN_32BYTES(uint16_t frame_buffer[FRAME_PIXELS]);
 
 volatile uint8_t frame_ready = 0;
-uint8_t current_mode = 0; // 0: Grayscale, 1: RGB
+uint8_t current_mode = 1; // 0: Grayscale, 1: RGB
 
 // --------------------------------------------------
 // 카메라 DMA 캡처 시작 함수
 // --------------------------------------------------
 void Camera_StartCapture(void) {
-	HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_SNAPSHOT, (uint32_t) frame_buffer,
+	HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_CONTINUOUS, (uint32_t) frame_buffer,
 	FRAME_WORDS);
 }
 
 // --------------------------------------------------
 // 카메라 모드 설정 함수
 // --------------------------------------------------
+
+//// YUV 모드
+//void Camera_SetMode(uint8_t is_rgb) {
+//	current_mode = is_rgb;
+//
+//	if (current_mode == 1) {
+//		// RGB 컬러 모드 (Normal)
+//		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_NORMAL, 0);
+//	} else {
+//		// Grayscale 흑백 모드 (BW)
+//		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_BW, 0);
+//	}
+//}
+
+//// rgb565 모드
 void Camera_SetMode(uint8_t is_rgb) {
 	current_mode = is_rgb;
 
-	if (current_mode == 1) {
-		// RGB 컬러 모드 (Normal)
-		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_NORMAL, 0);
-	} else {
-		// Grayscale 흑백 모드 (BW)
-		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_BW, 0);
-	}
+	CAMERA_IO_Write(0x60, 0xFF, 0x00);
+
+	// DSP reset
+	CAMERA_IO_Write(0x60, 0xE0, 0x04);
+
+	// RGB enable
+	CAMERA_IO_Write(0x60, 0xC2, 0x0C);
+
+	// RGB565
+	CAMERA_IO_Write(0x60, 0xDA, 0x09);
+
+	// DSP enable
+	CAMERA_IO_Write(0x60, 0xE0, 0x00);
+
+	if (current_mode)
+		ov2640_Config(0x60,
+		CAMERA_BLACK_WHITE,
+		CAMERA_BLACK_WHITE_NORMAL, 0);
+	else
+		ov2640_Config(0x60,
+		CAMERA_BLACK_WHITE,
+		CAMERA_BLACK_WHITE_BW, 0);
 }
 
 // --------------------------------------------------
