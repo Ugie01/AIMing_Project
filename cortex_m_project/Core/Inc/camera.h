@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#pragma once
 #include "main.h"
 
 // 해상도 설정 (QQVGA 160x120)

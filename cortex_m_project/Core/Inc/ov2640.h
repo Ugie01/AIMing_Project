@@ -27,6 +27,7 @@
  extern "C" {
 #endif 
 
+#pragma once
 /* Includes ------------------------------------------------------------------*/
 //#include "../Common/camera.h"
    

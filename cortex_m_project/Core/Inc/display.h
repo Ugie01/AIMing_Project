@@ -52,55 +52,15 @@ HAL_StatusTypeDef Display_UpdateImage(
  * 이 상태는 오버레이 조준점 색상뿐 아니라 서보모터 제어에서도 쓰이므로
  * 선언의 주인(owner)은 app_main 이다. display 는 받아쓰기만 한다.
  *
- * ── 1) app_main.h 의 extern "C" 블록 안에 아래를 추가한다 ──────────
+ * app_main.h 가 제공하는 것:
+ *   MachineState_t   (MACHINE_STATE_IDLE / TRACKING / LOCKON / MANUAL)
+ *   g_current_fps    측정된 FPS
+ *   g_track_state    MachineState_t 값
  *
- *     #include <stdint.h>
- *
- *     typedef enum
- *     {
- *         MACHINE_STATE_IDLE     = 0,   // 목표 탐색 중
- *         MACHINE_STATE_TRACKING = 1,   // 목표 포착/추적
- *         MACHINE_STATE_LOCKON   = 2    // 목표 사격 중
- *     } MachineState_t;
- *
- *     extern volatile float   g_current_fps;   // 측정된 FPS
- *     extern volatile uint8_t g_track_state;   // MachineState_t 값
- *
- * ── 2) app_main.cpp 에 실체를 정의한다 ────────────────────────────
- *
- *     volatile float   g_current_fps = 0.0f;
- *     volatile uint8_t g_track_state = MACHINE_STATE_IDLE;
- *
- * ── 3) 아래 OVERLAY_USE_APP_GLOBALS 를 1 로 바꾼다 ────────────────
- *
- * 그러면 display 는 app_main.h 의 선언을 그대로 받아쓰고, 아래 임시
- * 정의 블록은 컴파일에서 빠진다. (임시 블록은 그때 지워도 된다)
- *
- * 주의: app_main.h 가 display.h 를 되받아 include 하면 순환 참조가 되므로
- *       app_main.h 에서는 display.h 를 include 하지 않는다.
- *       (app_main.cpp 에서만 include 한다 — 지금 구조 그대로면 문제없다)
+ * 주의: app_main.h 에서 display.h 를 되받아 include 하면 순환 참조가 된다.
+ *       display.h 는 app_main.cpp 에서만 include 한다.
  * ------------------------------------------------------------------ */
-#define OVERLAY_USE_APP_GLOBALS   0
-
-#if (OVERLAY_USE_APP_GLOBALS == 1)
-
-/* MachineState_t / g_current_fps / g_track_state 를 app_main 에서 받아온다 */
 #include "app_main.h"
-
-#else
-
-/*
- * app_main 에 아직 선언이 없어서 두는 임시 정의.
- * 위 1)~3) 을 마치면 이 블록 전체를 삭제한다.
- */
-typedef enum
-{
-    MACHINE_STATE_IDLE     = 0,   /*!< 목표 탐색 중  : 초록 */
-    MACHINE_STATE_TRACKING = 1,   /*!< 목표 포착/추적: 노랑 */
-    MACHINE_STATE_LOCKON   = 2    /*!< 목표 사격 중  : 빨강 */
-} MachineState_t;
-
-#endif
 
 /**
  * @brief 오버레이 UI 표시 여부를 설정한다.

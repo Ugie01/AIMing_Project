@@ -9,13 +9,13 @@
 #include "camera.h"
 #include "display.h"
 #include "motor.h"
+#include "joystick.h"
 #include "edge-impulse-sdk/classifier/ei_run_classifier.h" // Edge Impulse 핵심 헤더
 
 extern TIM_HandleTypeDef htim2;
 extern UART_HandleTypeDef huart1;
 extern I2C_HandleTypeDef hi2c1;
 extern DCMI_HandleTypeDef hdcmi;
-
 
 #define OV2640_I2C_ADDR (0x30 << 1)  // 8비트 기준 Write 주소
 #define CROP_W     96
@@ -26,17 +26,19 @@ extern DCMI_HandleTypeDef hdcmi;
 PID_Controller pan_pid;
 PID_Controller tilt_pid;
 
-
 ALIGN_32BYTES(static float ai_input_features[CROP_W * CROP_H]);
 ALIGN_32BYTES(static uint16_t crop_buffer[CROP_W * CROP_H]);
 
-extern volatile float g_current_fps;
 extern uint16_t overlay_cross_color;
+volatile float g_current_fps = 0.0f;
+volatile uint8_t g_track_state = (uint8_t) MACHINE_STATE_IDLE;
+
 extern const float test_features1[];
 extern const float test_features2[];
 extern osMessageQueueId_t Queue1Handle;
 
 #define STEP_SIZE 25
+#define MOTOR_TASK_PERIOD_MS   20U
 int tilt_toggle_state = 0;
 
 uint8_t rx_data;             // 시리얼 수신 버퍼 1바이트
@@ -49,7 +51,6 @@ typedef struct {
 	float y;
 	float detected; // 1.0f: 객체 있음, 0.0f: 객체 없음
 } TargetCoord_t;
-
 
 int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
 	for (size_t i = 0; i < length; i++) {
@@ -284,7 +285,6 @@ void VisionTask(void) {
 			if (Display_UpdateImage(crop_buffer, CROP_W, CROP_H) != HAL_OK) {
 				Error_Handler();
 			}
-
 		}
 
 // DCMI 하드웨어 에러 발생 시 복구
@@ -311,33 +311,89 @@ void MotorTask(void) {
 	PID_Init(&pan_pid, 0.5f, 0.00f, 0.0f, ANGLE_MID);
 	PID_Init(&tilt_pid, 0.5f, 0.00f, 0.0f, ANGLE_MID);
 
-	static float current_x = 500.0f;
-	static float current_y = 500.0f;
+	pan_val = ANGLE_MID;
+	tilt_val = ANGLE_MID;
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pan_val);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, tilt_val);
+
+	Joystick_Init();
+	Motor_ManualSetPosition((float) ANGLE_MID, (float) ANGLE_MID);
 
 	TargetCoord_t rx_msg;
+	JoystickInput_t joy;
 
 	HAL_UART_Receive_IT(&huart1, &rx_data, 1);
 
 	for (;;) {
-		UART_Printf("MotorTask Stack Free: %lu Words (%lu Bytes)\r\n",
-				motor_stack, motor_stack * 4);
+//		UART_Printf("MotorTask Stack Free: %lu Words (%lu Bytes)\r\n",
+//				motor_stack, motor_stack * 4);
+		Joystick_Read(&joy);
 
-		osStatus_t status = osMessageQueueGet(Queue1Handle, &rx_msg, NULL, 20);
+		if (joy.button_pressed) {
+			if (g_track_state == MACHINE_STATE_MANUAL) {
+				/*
+				 * MANUAL -> AUTO
+				 * 수동으로 옮겨 놓은 위치를 UART/PID 쪽 현재값에 넘겨주어
+				 * 전환 순간 서보가 튀지 않게 한다.
+				 */
+				float pan_now;
+				float tilt_now;
+				Motor_ManualGetPosition(&pan_now, &tilt_now);
 
-		if (status == osOK && rx_msg.detected > 0.5f) {
+				pan_val = (uint16_t) pan_now;
+				tilt_val = (uint16_t) tilt_now;
+				pan_pid.current = pan_now;
+				tilt_pid.current = tilt_now;
+//
+				g_track_state = (uint8_t) MACHINE_STATE_IDLE;
+				UART_Printf("Mode -> AUTO\r\n");
+
+
+			}
+			else {
+				/*
+				 * AUTO -> MANUAL
+				 * 현재 서보가 실제로 가 있는 위치를 수동 제어가 이어받는다.
+				 */
+				Motor_ManualSetPosition(
+						(float) __HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_1),
+						(float) __HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_2));
+
+				g_track_state = (uint8_t) MACHINE_STATE_MANUAL;
+				UART_Printf("Mode -> MANUAL\r\n");
+			}
+		}
+
+
+		if (g_track_state == MACHINE_STATE_MANUAL) {
+			/* 속도형 제어. 중립이면 증분이 0 이라 그 자리에 멈춘다. */
+			Motor_ManualProcess(&joy, &htim2, MOTOR_TASK_PERIOD_MS);
+		} else {
+
+			osStatus_t status = osMessageQueueGet(Queue1Handle, &rx_msg,
+			NULL, 20);
+
+			if (status == osOK && rx_msg.detected > 0.5f) {
 
 // 객체가 정상 감지되었을 때 PID 연산 수행
-			Motor_PID_Process_With_Error(&pan_pid, &tilt_pid, rx_msg.x,
-					rx_msg.y, &htim2);
+				Motor_PID_Process_With_Error(&pan_pid, &tilt_pid, rx_msg.x,
+						rx_msg.y, &htim2);
 
-			UART_Printf("Target(%.1f, %.1f) | Pan_Cur: %d | Tilt_Cur: %d\r\n",
-					rx_msg.x, rx_msg.y, (int) pan_pid.current,
-					(int) tilt_pid.current);
-		} else {
-// 객체가 없거나 큐 수신 실패 시 모터 제어를 멈추거나 대기 상태 유지
-// (필요 시 여기서 멈춤 로직 추가)
+				UART_Printf(
+						"Target(%.1f, %.1f) | Pan_Cur: %d | Tilt_Cur: %d\r\n",
+						rx_msg.x, rx_msg.y, (int) pan_pid.current,
+						(int) tilt_pid.current);
+			}
 		}
-		osDelay(1); // 10ms 주기
+
+
+//
+//		AUTO 경로를 되살릴 때는 위 블록을 아래처럼 감싼다.
+//		MANUAL 중에는 조이스틱이 서보를 소유하므로 PID 가 끼어들면 안 된다.
+//
+//		if (g_track_state != MACHINE_STATE_MANUAL) { ... }
+
+		osDelay(MOTOR_TASK_PERIOD_MS);
 	}
 }
 

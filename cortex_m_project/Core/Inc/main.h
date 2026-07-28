@@ -65,6 +65,12 @@ void Error_Handler(void);
 #define TFT_LED_GPIO_Port GPIOC
 #define TFT_CS_Pin GPIO_PIN_9
 #define TFT_CS_GPIO_Port GPIOB
+#define JOY_SW_Pin GPIO_PIN_2
+#define JOY_SW_GPIO_Port GPIOA
+#define JOY_Y_Pin GPIO_PIN_1
+#define JOY_Y_GPIO_Port GPIOA
+#define JOY_X_Pin GPIO_PIN_0
+#define JOY_X_GPIO_Port GPIOA
 #define TFT_RST_Pin GPIO_PIN_10
 #define TFT_RST_GPIO_Port GPIOB
 #define TFT_DC_Pin GPIO_PIN_11

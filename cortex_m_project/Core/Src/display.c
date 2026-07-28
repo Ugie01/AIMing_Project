@@ -560,22 +560,11 @@ HAL_StatusTypeDef Display_Init(void)
  * 시스템 상태 / FPS 연동부
  *
  * 상태와 FPS 의 주인은 app_main 이다. display 는 읽기만 한다.
- * app_main 에 무엇을 선언해야 하는지는 display.h 의
- * OVERLAY_USE_APP_GLOBALS 주석에 정리해 두었다.
+ * display.h 가 app_main.h 를 include 하므로 g_current_fps / g_track_state
+ * 선언이 그대로 넘어온다. 여기서 다시 extern 을 적을 필요가 없다.
  *
- * OVERLAY_USE_APP_GLOBALS == 1 이면 display.h 가 app_main.h 를 include 하므로
- * g_current_fps / g_track_state 선언이 그대로 넘어온다. 여기서 다시 extern 을
- * 적을 필요가 없다.
- *
- * 아직 0 이므로 지금은 아래 내부 대체 변수를 쓴다.
- * (화면에는 IDLE 상태 초록 조준점 / FPS 0.0 으로 고정 표시된다)
+ * 실체 정의는 app_main.cpp 에 있다.
  * ------------------------------------------------------------------ */
-#if (OVERLAY_USE_APP_GLOBALS == 0)
-
-volatile float g_current_fps = 0.0f;
-static volatile uint8_t g_track_state = (uint8_t)MACHINE_STATE_IDLE;
-
-#endif
 
 
 /* 조준점 형상 : 십자선 + 중앙 갭 (전체 48x48px, 선 두께 2px, 갭 12px) */
@@ -618,6 +607,7 @@ static volatile uint8_t g_track_state = (uint8_t)MACHINE_STATE_IDLE;
 #define OVERLAY_COLOR_IDLE      DISPLAY_COLOR_GREEN
 #define OVERLAY_COLOR_TRACKING  DISPLAY_COLOR_YELLOW
 #define OVERLAY_COLOR_LOCKON    DISPLAY_COLOR_RED
+#define OVERLAY_COLOR_MANUAL    DISPLAY_COLOR_CYAN
 
 /* 밝은 영상 위에서도 형상이 보이도록 깔아주는 외곽선/그림자 색 */
 #define OVERLAY_COLOR_OUTLINE   DISPLAY_COLOR_BLACK
@@ -950,6 +940,10 @@ static void Overlay_BeginFrame(void)
     case MACHINE_STATE_LOCKON:
         overlay_cross_color = OVERLAY_COLOR_LOCKON;
         break;
+
+	case MACHINE_STATE_MANUAL:
+		overlay_cross_color = OVERLAY_COLOR_MANUAL;
+		break;
 
     case MACHINE_STATE_IDLE:
     default:
