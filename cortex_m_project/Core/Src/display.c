@@ -516,6 +516,495 @@ HAL_StatusTypeDef Display_Init(void)
 }
 
 
+/* ==================================================================
+ * 오버레이 UI
+ *
+ * Display_UpdateImage() 는 프레임버퍼 없이 한 스캔라인(320px, 640byte)씩
+ * 만들어 SPI DMA 로 곧바로 흘려보낸다. 따라서 오버레이도 레이어를 따로
+ * 두지 않고, 스캔라인 버퍼가 완성된 직후 DMA 전송 직전에 그 줄에 걸리는
+ * 오버레이 픽셀만 덮어쓰는 방식으로 합성한다.
+ * ================================================================== */
+
+/* ------------------------------------------------------------------
+ * 시스템 상태 / FPS 연동부
+ *
+ * 상태와 FPS 의 주인은 app_main 이다. display 는 읽기만 한다.
+ * app_main 에 무엇을 선언해야 하는지는 display.h 의
+ * OVERLAY_USE_APP_GLOBALS 주석에 정리해 두었다.
+ *
+ * OVERLAY_USE_APP_GLOBALS == 1 이면 display.h 가 app_main.h 를 include 하므로
+ * g_current_fps / g_track_state 선언이 그대로 넘어온다. 여기서 다시 extern 을
+ * 적을 필요가 없다.
+ *
+ * 아직 0 이므로 지금은 아래 내부 대체 변수를 쓴다.
+ * (화면에는 IDLE 상태 초록 조준점 / FPS 0.0 으로 고정 표시된다)
+ * ------------------------------------------------------------------ */
+#if (OVERLAY_USE_APP_GLOBALS == 0)
+
+volatile float g_current_fps = 0.0f;
+static volatile uint8_t g_track_state = (uint8_t)MACHINE_STATE_IDLE;
+
+#endif
+
+
+/* 조준점 형상 : 십자선 + 중앙 갭 (전체 48x48px, 선 두께 2px, 갭 12px) */
+#define OVERLAY_CENTER_X       (DISPLAY_WIDTH / 2U)             /* 160 */
+#define OVERLAY_CENTER_Y       (DISPLAY_HEIGHT / 2U)            /* 120 */
+#define OVERLAY_CROSS_ARM      24U                              /* 중심~끝 */
+#define OVERLAY_CROSS_GAP      6U                               /* 중심~선 시작 */
+#define OVERLAY_CROSS_THICK    2U
+#define OVERLAY_CROSS_LEN      (OVERLAY_CROSS_ARM - OVERLAY_CROSS_GAP)
+
+/* 선 두께 2px 이므로 중심에서 1px 앞에서 시작한다 */
+#define OVERLAY_CROSS_X0       (OVERLAY_CENTER_X - (OVERLAY_CROSS_THICK / 2U))
+#define OVERLAY_CROSS_Y0       (OVERLAY_CENTER_Y - (OVERLAY_CROSS_THICK / 2U))
+
+/* 5x7 비트맵 폰트를 2배 스케일로 그린다 */
+#define OVERLAY_FONT_W         5U
+#define OVERLAY_FONT_H         7U
+#define OVERLAY_TEXT_SCALE     2U
+#define OVERLAY_CHAR_W         (OVERLAY_FONT_W * OVERLAY_TEXT_SCALE)   /* 10 */
+#define OVERLAY_CHAR_H         (OVERLAY_FONT_H * OVERLAY_TEXT_SCALE)   /* 14 */
+#define OVERLAY_CHAR_GAP       2U
+#define OVERLAY_CHAR_ADVANCE   (OVERLAY_CHAR_W + OVERLAY_CHAR_GAP)     /* 12 */
+
+/* "FPS 999.9" + '\0' = 10자 */
+#define OVERLAY_TEXT_MAX       12U
+#define OVERLAY_TEXT_MARGIN_X  6
+#define OVERLAY_TEXT_MARGIN_Y  6
+
+/*
+ * 스캔라인 조기 종료용 상하 경계.
+ * 240줄 중 오버레이가 걸리는 줄은 60줄 남짓이므로 나머지는 즉시 빠져나간다.
+ * 검은 외곽선과 텍스트 그림자 때문에 1px 여유를 둔다.
+ */
+#define OVERLAY_CROSS_TOP      ((int32_t)OVERLAY_CENTER_Y - (int32_t)OVERLAY_CROSS_ARM - 1)
+#define OVERLAY_CROSS_BOTTOM   ((int32_t)OVERLAY_CENTER_Y + (int32_t)OVERLAY_CROSS_ARM + 1)
+#define OVERLAY_TEXT_TOP       ((int32_t)OVERLAY_TEXT_MARGIN_Y - 1)
+#define OVERLAY_TEXT_BOTTOM    ((int32_t)OVERLAY_TEXT_MARGIN_Y + (int32_t)OVERLAY_CHAR_H + 1)
+
+/* 조준점 색상 */
+#define OVERLAY_COLOR_IDLE      DISPLAY_COLOR_GREEN
+#define OVERLAY_COLOR_TRACKING  DISPLAY_COLOR_YELLOW
+#define OVERLAY_COLOR_LOCKON    DISPLAY_COLOR_RED
+
+/* 밝은 영상 위에서도 형상이 보이도록 깔아주는 외곽선/그림자 색 */
+#define OVERLAY_COLOR_OUTLINE   DISPLAY_COLOR_BLACK
+#define OVERLAY_COLOR_TEXT      DISPLAY_COLOR_WHITE
+
+
+typedef struct
+{
+    uint16_t x;
+    uint16_t y;
+    uint16_t w;
+    uint16_t h;
+} OverlayRect_t;
+
+/*
+ * 십자선을 5개의 사각형으로 분해해 둔다.
+ * (위 팔, 아래 팔, 왼쪽 팔, 오른쪽 팔, 중앙 도트)
+ */
+static const OverlayRect_t overlay_cross_rects[] =
+{
+    /* 위쪽 세로 팔 */
+    { OVERLAY_CROSS_X0,
+      OVERLAY_CENTER_Y - OVERLAY_CROSS_ARM,
+      OVERLAY_CROSS_THICK,
+      OVERLAY_CROSS_LEN },
+
+    /* 아래쪽 세로 팔 */
+    { OVERLAY_CROSS_X0,
+      OVERLAY_CENTER_Y + OVERLAY_CROSS_GAP,
+      OVERLAY_CROSS_THICK,
+      OVERLAY_CROSS_LEN },
+
+    /* 왼쪽 가로 팔 */
+    { OVERLAY_CENTER_X - OVERLAY_CROSS_ARM,
+      OVERLAY_CROSS_Y0,
+      OVERLAY_CROSS_LEN,
+      OVERLAY_CROSS_THICK },
+
+    /* 오른쪽 가로 팔 */
+    { OVERLAY_CENTER_X + OVERLAY_CROSS_GAP,
+      OVERLAY_CROSS_Y0,
+      OVERLAY_CROSS_LEN,
+      OVERLAY_CROSS_THICK },
+
+    /* 중앙 도트 */
+    { OVERLAY_CROSS_X0,
+      OVERLAY_CROSS_Y0,
+      OVERLAY_CROSS_THICK,
+      OVERLAY_CROSS_THICK },
+};
+
+#define OVERLAY_CROSS_RECT_COUNT \
+    (sizeof(overlay_cross_rects) / sizeof(overlay_cross_rects[0]))
+
+
+/*
+ * 5x7 비트맵 폰트 (컬럼 단위, bit0 = 맨 윗줄)
+ *
+ * FPS 표시에 필요한 '0'~'9', '.', 'F', 'P', 'S', ' ' 만 담는다.
+ */
+static const uint8_t overlay_font5x7[][OVERLAY_FONT_W] =
+{
+    { 0x3EU, 0x51U, 0x49U, 0x45U, 0x3EU },  /*  0 : '0' */
+    { 0x00U, 0x42U, 0x7FU, 0x40U, 0x00U },  /*  1 : '1' */
+    { 0x42U, 0x61U, 0x51U, 0x49U, 0x46U },  /*  2 : '2' */
+    { 0x21U, 0x41U, 0x45U, 0x4BU, 0x31U },  /*  3 : '3' */
+    { 0x18U, 0x14U, 0x12U, 0x7FU, 0x10U },  /*  4 : '4' */
+    { 0x27U, 0x45U, 0x45U, 0x45U, 0x39U },  /*  5 : '5' */
+    { 0x3CU, 0x4AU, 0x49U, 0x49U, 0x30U },  /*  6 : '6' */
+    { 0x01U, 0x71U, 0x09U, 0x05U, 0x03U },  /*  7 : '7' */
+    { 0x36U, 0x49U, 0x49U, 0x49U, 0x36U },  /*  8 : '8' */
+    { 0x06U, 0x49U, 0x49U, 0x29U, 0x1EU },  /*  9 : '9' */
+    { 0x00U, 0x60U, 0x60U, 0x00U, 0x00U },  /* 10 : '.' */
+    { 0x7FU, 0x09U, 0x09U, 0x09U, 0x01U },  /* 11 : 'F' */
+    { 0x7FU, 0x09U, 0x09U, 0x09U, 0x06U },  /* 12 : 'P' */
+    { 0x46U, 0x49U, 0x49U, 0x49U, 0x31U },  /* 13 : 'S' */
+};
+
+#define OVERLAY_GLYPH_DOT   10
+#define OVERLAY_GLYPH_F     11
+#define OVERLAY_GLYPH_P     12
+#define OVERLAY_GLYPH_S     13
+
+
+/* 오버레이 표시 여부 */
+static volatile bool overlay_active = true;
+
+/*
+ * 프레임 단위로 확정되는 값들.
+ *
+ * 스캔라인을 그리는 도중 g_track_state / g_current_fps 가 바뀌어도
+ * 화면 위아래가 서로 다른 상태로 섞이지 않도록, 프레임 시작 시점에
+ * 한 번만 스냅샷을 떠서 아래 변수에 담아두고 그 값으로만 그린다.
+ */
+static uint16_t overlay_cross_color = OVERLAY_COLOR_IDLE;
+static char     overlay_text[OVERLAY_TEXT_MAX];
+static int32_t  overlay_text_x      = 0;
+
+
+/**
+ * @brief 문자 하나에 대응하는 폰트 글리프를 찾는다.
+ *
+ * @return 글리프 포인터. 그릴 필요가 없는 문자(공백/미지원)면 NULL.
+ */
+static const uint8_t *Overlay_GetGlyph(char character)
+{
+    if ((character >= '0') && (character <= '9'))
+    {
+        return overlay_font5x7[character - '0'];
+    }
+
+    switch (character)
+    {
+    case '.':
+        return overlay_font5x7[OVERLAY_GLYPH_DOT];
+
+    case 'F':
+        return overlay_font5x7[OVERLAY_GLYPH_F];
+
+    case 'P':
+        return overlay_font5x7[OVERLAY_GLYPH_P];
+
+    case 'S':
+        return overlay_font5x7[OVERLAY_GLYPH_S];
+
+    default:
+        /* 공백을 포함해 그릴 것이 없는 문자 */
+        return NULL;
+    }
+}
+
+
+/**
+ * @brief FPS 값을 "FPS 30.0" 형태의 문자열로 만든다.
+ *
+ * snprintf("%.1f") 를 쓰면 float 포맷팅 루틴이 통째로 링크되므로
+ * 소수 첫째 자리까지 직접 정수 연산으로 만든다.
+ *
+ * @return 만들어진 문자열 길이
+ */
+static uint32_t Overlay_FormatFps(float fps, char *out)
+{
+    uint32_t scaled;
+    uint32_t whole;
+    uint32_t frac;
+    uint32_t index = 0U;
+
+    if (!(fps > 0.0f))
+    {
+        /* 음수와 NaN 을 함께 걸러낸다 */
+        fps = 0.0f;
+    }
+
+    /* 소수 첫째 자리까지 반올림 */
+    scaled = (uint32_t)((fps * 10.0f) + 0.5f);
+
+    if (scaled > 9999U)
+    {
+        scaled = 9999U;   /* 표시 상한 999.9 */
+    }
+
+    whole = scaled / 10U;
+    frac  = scaled % 10U;
+
+    out[index++] = 'F';
+    out[index++] = 'P';
+    out[index++] = 'S';
+    out[index++] = ' ';
+
+    if (whole >= 100U)
+    {
+        out[index++] = (char)('0' + (whole / 100U));
+    }
+
+    if (whole >= 10U)
+    {
+        out[index++] = (char)('0' + ((whole / 10U) % 10U));
+    }
+
+    out[index++] = (char)('0' + (whole % 10U));
+    out[index++] = '.';
+    out[index++] = (char)('0' + frac);
+    out[index]   = '\0';
+
+    return index;
+}
+
+
+/**
+ * @brief 스캔라인 버퍼의 [x, x + width) 구간을 한 색으로 채운다.
+ *
+ * 화면 밖으로 나가는 부분은 잘라낸다.
+ */
+static void Overlay_FillSpan(uint8_t *line,
+                             int32_t x,
+                             int32_t width,
+                             uint16_t color)
+{
+    int32_t x_end = x + width;
+
+    if (x < 0)
+    {
+        x = 0;
+    }
+
+    if (x_end > (int32_t)DISPLAY_WIDTH)
+    {
+        x_end = (int32_t)DISPLAY_WIDTH;
+    }
+
+    for (; x < x_end; x++)
+    {
+        /* Display_UpdateImage 와 동일하게 Big-Endian 으로 적재한다 */
+        line[x * 2]       = (uint8_t)(color >> 8);
+        line[(x * 2) + 1] = (uint8_t)(color & 0xFFU);
+    }
+}
+
+
+/**
+ * @brief 사각형 중 현재 스캔라인에 걸리는 부분을 그린다.
+ *
+ * @param grow  사각형을 사방으로 넓힐 픽셀 수. 외곽선을 그릴 때 1을 준다.
+ */
+static void Overlay_DrawRectLine(uint8_t *line,
+                                 int32_t y,
+                                 const OverlayRect_t *rect,
+                                 int32_t grow,
+                                 uint16_t color)
+{
+    int32_t rect_y      = (int32_t)rect->y - grow;
+    int32_t rect_height = (int32_t)rect->h + (2 * grow);
+
+    if ((y < rect_y) || (y >= (rect_y + rect_height)))
+    {
+        return;
+    }
+
+    Overlay_FillSpan(line,
+                     (int32_t)rect->x - grow,
+                     (int32_t)rect->w + (2 * grow),
+                     color);
+}
+
+
+/**
+ * @brief 글리프 하나 중 현재 스캔라인에 걸리는 부분을 그린다.
+ */
+static void Overlay_DrawGlyphLine(uint8_t *line,
+                                  int32_t y,
+                                  int32_t glyph_x,
+                                  int32_t glyph_y,
+                                  const uint8_t *glyph,
+                                  uint16_t color)
+{
+    int32_t font_row;
+    uint32_t column;
+
+    if (y < glyph_y)
+    {
+        return;
+    }
+
+    /* 2배 스케일이므로 화면 2줄이 폰트 1줄에 대응한다 */
+    font_row = (y - glyph_y) / (int32_t)OVERLAY_TEXT_SCALE;
+
+    if (font_row >= (int32_t)OVERLAY_FONT_H)
+    {
+        return;
+    }
+
+    for (column = 0U; column < OVERLAY_FONT_W; column++)
+    {
+        if (((glyph[column] >> font_row) & 0x01U) != 0U)
+        {
+            Overlay_FillSpan(line,
+                             glyph_x + (int32_t)(column * OVERLAY_TEXT_SCALE),
+                             (int32_t)OVERLAY_TEXT_SCALE,
+                             color);
+        }
+    }
+}
+
+
+/**
+ * @brief 문자열 중 현재 스캔라인에 걸리는 부분을 그린다.
+ */
+static void Overlay_DrawTextLine(uint8_t *line,
+                                 int32_t y,
+                                 int32_t text_x,
+                                 int32_t text_y,
+                                 const char *text,
+                                 uint16_t color)
+{
+    uint32_t index;
+
+    for (index = 0U; text[index] != '\0'; index++)
+    {
+        const uint8_t *glyph = Overlay_GetGlyph(text[index]);
+
+        if (glyph != NULL)
+        {
+            Overlay_DrawGlyphLine(line,
+                                  y,
+                                  text_x + (int32_t)(index * OVERLAY_CHAR_ADVANCE),
+                                  text_y,
+                                  glyph,
+                                  color);
+        }
+    }
+}
+
+
+/**
+ * @brief 프레임 시작 시 상태/FPS 를 스냅샷하고 그릴 내용을 확정한다.
+ */
+static void Overlay_BeginFrame(void)
+{
+    uint8_t  state  = g_track_state;
+    float    fps    = g_current_fps;
+    uint32_t length;
+    int32_t  width;
+
+    switch (state)
+    {
+    case MACHINE_STATE_TRACKING:
+        overlay_cross_color = OVERLAY_COLOR_TRACKING;
+        break;
+
+    case MACHINE_STATE_LOCKON:
+        overlay_cross_color = OVERLAY_COLOR_LOCKON;
+        break;
+
+    case MACHINE_STATE_IDLE:
+    default:
+        overlay_cross_color = OVERLAY_COLOR_IDLE;
+        break;
+    }
+
+    length = Overlay_FormatFps(fps, overlay_text);
+
+    /* 마지막 글자 뒤의 자간은 폭에서 빼고 우측 정렬한다 */
+    width = (int32_t)(length * OVERLAY_CHAR_ADVANCE) - (int32_t)OVERLAY_CHAR_GAP;
+
+    overlay_text_x = (int32_t)DISPLAY_WIDTH - OVERLAY_TEXT_MARGIN_X - width;
+}
+
+
+/**
+ * @brief 완성된 스캔라인 버퍼 위에 오버레이를 덮어쓴다.
+ *
+ * @param line 320픽셀(640바이트) 분량의 RGB565 Big-Endian 버퍼
+ * @param y    화면 세로 좌표
+ */
+static void Overlay_RenderLine(uint8_t *line, uint16_t y)
+{
+    int32_t line_y = (int32_t)y;
+    uint32_t index;
+
+    /* 오버레이가 없는 줄은 즉시 빠져나간다 (240줄 중 대부분) */
+    if (((line_y < OVERLAY_CROSS_TOP) || (line_y > OVERLAY_CROSS_BOTTOM)) &&
+        ((line_y < OVERLAY_TEXT_TOP)  || (line_y > OVERLAY_TEXT_BOTTOM)))
+    {
+        return;
+    }
+
+    /*
+     * 십자선은 검은 외곽선을 먼저 전부 깔고 나서 본체를 얹는다.
+     * 사각형마다 외곽선-본체를 번갈아 그리면 옆 사각형의 외곽선이
+     * 이미 그린 본체를 덮어버린다.
+     */
+    for (index = 0U; index < OVERLAY_CROSS_RECT_COUNT; index++)
+    {
+        Overlay_DrawRectLine(line,
+                             line_y,
+                             &overlay_cross_rects[index],
+                             1,
+                             OVERLAY_COLOR_OUTLINE);
+    }
+
+    for (index = 0U; index < OVERLAY_CROSS_RECT_COUNT; index++)
+    {
+        Overlay_DrawRectLine(line,
+                             line_y,
+                             &overlay_cross_rects[index],
+                             0,
+                             overlay_cross_color);
+    }
+
+    /* FPS 텍스트도 그림자를 먼저 깔고 본문을 얹는다 */
+    Overlay_DrawTextLine(line,
+                         line_y,
+                         overlay_text_x + 1,
+                         OVERLAY_TEXT_MARGIN_Y + 1,
+                         overlay_text,
+                         OVERLAY_COLOR_OUTLINE);
+
+    Overlay_DrawTextLine(line,
+                         line_y,
+                         overlay_text_x,
+                         OVERLAY_TEXT_MARGIN_Y,
+                         overlay_text,
+                         OVERLAY_COLOR_TEXT);
+}
+
+
+void ActivateOverlayWidget(bool enable)
+{
+    overlay_active = enable;
+}
+
+
+bool IsOverlayWidgetActive(void)
+{
+    return overlay_active;
+}
+
+
 // SPI DMA 전송 완료 대기를 위한 플래그 또는 상태 확인용 변수
 volatile uint8_t display_dma_completed = 0;
 
@@ -635,6 +1124,11 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 
 	uint8_t *p_bytes = (uint8_t*) image;
 
+	// 이번 프레임에 그릴 오버레이 내용(상태 색상 / FPS 문자열) 확정
+	if (overlay_active) {
+		Overlay_BeginFrame();
+	}
+
 	for (dst_y = 0U; dst_y < DISPLAY_HEIGHT; dst_y++) {
 		src_y = ((uint32_t) dst_y * height) / DISPLAY_HEIGHT;
 
@@ -649,10 +1143,12 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);   // 상위 바이트
 			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU); // 하위 바이트
 
-//			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel & 0xFFU);       // 하위 바이트를 먼저 전송
-//			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel >> 8);   // 상위 바이트를 나중에 전송
 		}
 
+		// 완성된 영상 스캔라인 위에 오버레이 UI를 덮어씀
+		if (overlay_active) {
+			Overlay_RenderLine(display_tx_buffer, dst_y);
+		}
 
 		// 전송할 텍스처 버퍼 캐시 클린 (메모리에 확실히 써지도록 함)
 		SCB_CleanDCache_by_Addr((uint32_t*) display_tx_buffer,

@@ -20,7 +20,8 @@ extern DCMI_HandleTypeDef hdcmi;
 #define CROP_W     96
 #define CROP_H     96
 
-uint32_t frame_FPS = 0;
+extern volatile float g_current_fps;
+
 ALIGN_32BYTES(static float ai_input_features[CROP_W * CROP_H]);
 
 extern const float test_features1[];
@@ -117,12 +118,16 @@ void VisionTask(void) {
 
 	// FPS 측정을 위한 변수 추가
 	uint32_t last_tick = HAL_GetTick();
-
 	for (;;) {
 		if (frame_ready) {
 //			UART_Printf("VisionTask Stack Free: %lu Words (%lu Bytes)\r\n",
 //					vision_stack, vision_stack * 4);
-			frame_FPS++;      // 프레임 카운트 증가
+
+
+			uint32_t current_tick = HAL_GetTick();
+			g_current_fps = 1000.0f / (float) (current_tick - last_tick);
+			last_tick = current_tick;
+
 			frame_ready = 0;    // 플래그 초기화
 
 			// 카메라 DMA가 수신한 원본 프레임 버퍼 D-Cache 동기화
@@ -184,14 +189,6 @@ void VisionTask(void) {
 			hdcmi.State = HAL_DCMI_STATE_READY;
 			frame_ready = 0;
 			Camera_StartCapture();
-		}
-
-		// 1초(1000ms)마다 FPS 출력
-		uint32_t current_tick = HAL_GetTick();
-		if (current_tick - last_tick >= 1000) {
-			UART_Printf("Current FPS: %lu\r\n", frame_FPS);
-			frame_FPS = 0;          // 카운트 리셋
-			last_tick = current_tick; // 시간 갱신
 		}
 
 		osDelay(1);
