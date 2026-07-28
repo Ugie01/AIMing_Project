@@ -4,6 +4,9 @@
 #include "spi.h"
 
 #include <stddef.h>
+#include "cmsis_os.h"
+
+extern uint8_t current_mode;
 
 /* ILI9341 commands */
 #define ILI9341_CMD_SWRESET   0x01U
@@ -516,6 +519,91 @@ HAL_StatusTypeDef Display_Init(void)
 // SPI DMA 전송 완료 대기를 위한 플래그 또는 상태 확인용 변수
 volatile uint8_t display_dma_completed = 0;
 
+// YUV 모드
+//HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
+//		uint16_t height) {
+//	HAL_StatusTypeDef status;
+//	uint16_t dst_x;
+//	uint16_t dst_y;
+//	uint32_t src_x;
+//	uint32_t src_y;
+//	uint32_t src_index;
+//
+//	if (image == NULL || width == 0U || height == 0U) {
+//		return HAL_ERROR;
+//	}
+//
+//	if ((width > DISPLAY_WIDTH) || (height > DISPLAY_HEIGHT)) {
+//		return HAL_ERROR;
+//	}
+//
+//	// 1. STM32H7 캐시 동기화 (카메라로 받은 원본 이미지 메모리 무효화)
+//	SCB_InvalidateDCache_by_Addr((uint32_t*) image, width * height * 2);
+//
+//	status = Display_SetAddressWindow(0U, 0U, DISPLAY_WIDTH - 1U,
+//	DISPLAY_HEIGHT - 1U);
+//	if (status != HAL_OK) {
+//		return status;
+//	}
+//
+//	DISPLAY_CS_LOW();
+//	DISPLAY_DC_DATA();
+//
+//	uint8_t *p_bytes = (uint8_t*) image;
+//
+//	for (dst_y = 0U; dst_y < DISPLAY_HEIGHT; dst_y++) {
+//		src_y = ((uint32_t) dst_y * height) / DISPLAY_HEIGHT;
+//
+//		for (dst_x = 0U; dst_x < DISPLAY_WIDTH; dst_x++) {
+//			src_x = ((uint32_t) dst_x * width) / DISPLAY_WIDTH;
+//			src_index = (src_y * width) + src_x;
+//
+//			// current_mode가 1(RGB)일 때
+//			if (current_mode == 1) {
+//				uint16_t pixel = image[src_index];
+//				display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);
+//				display_tx_buffer[(dst_x * 2U) + 1U] =
+//						(uint8_t) (pixel & 0xFFU);
+//			}
+//			// current_mode가 0(Grayscale)일 때
+//			else {
+//				uint8_t *p_bytes = (uint8_t*) image;
+//				uint8_t y_val = p_bytes[src_index * 2U + 1U];
+//
+//				uint16_t r = (y_val >> 3) & 0x1FU;
+//				uint16_t g = (y_val >> 2) & 0x3FU;
+//				uint16_t b = (y_val >> 3) & 0x1FU;
+//				uint16_t pixel = (r << 11) | (g << 5) | b;
+//
+//				display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);
+//				display_tx_buffer[(dst_x * 2U) + 1U] =
+//						(uint8_t) (pixel & 0xFFU);
+//			}
+//		}
+//
+//		// 2. 전송할 텍스처 버퍼 캐시 클린 (메모리에 확실히 써지도록 함)
+//		SCB_CleanDCache_by_Addr((uint32_t*) display_tx_buffer,
+//		DISPLAY_WIDTH * 2U);
+//
+//		// 3. SPI DMA 전송 시작
+//		display_dma_completed = 0;
+//		if (HAL_SPI_Transmit_DMA(&hspi2, display_tx_buffer, DISPLAY_WIDTH * 2U)
+//				!= HAL_OK) {
+//			DISPLAY_CS_HIGH();
+//			return HAL_ERROR;
+//		}
+//
+//		// 4. DMA 전송이 완료될 때까지 대기
+//		while (display_dma_completed == 0) {
+//			// 대기 중 칩셋 부하를 줄이려면 __WFI(); 삽입 가능
+//		}
+//	}
+//
+//	DISPLAY_CS_HIGH();
+//	return HAL_OK;
+//}
+
+// rgb565 mode
 HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 		uint16_t height) {
 	HAL_StatusTypeDef status;
@@ -533,11 +621,11 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 		return HAL_ERROR;
 	}
 
-	// 1. STM32H7 캐시 동기화 (카메라로 받은 원본 이미지 메모리 무효화)
+	// STM32H7 캐시 동기화 (카메라로 받은 원본 이미지 메모리 무효화)
 	SCB_InvalidateDCache_by_Addr((uint32_t*) image, width * height * 2);
 
 	status = Display_SetAddressWindow(0U, 0U, DISPLAY_WIDTH - 1U,
-			DISPLAY_HEIGHT - 1U);
+	DISPLAY_HEIGHT - 1U);
 	if (status != HAL_OK) {
 		return status;
 	}
@@ -554,25 +642,20 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 			src_x = ((uint32_t) dst_x * width) / DISPLAY_WIDTH;
 			src_index = (src_y * width) + src_x;
 
-			// 흑백/컬러 모드에 따른 픽셀 추출 방식 확인
-			// (현재 그레이스케일 추출 로직이 들어있다면 이 부분을 유지)
-			uint8_t y_val = p_bytes[src_index * 2U + 1U];
+			// 카메라가 보낸 RGB565 픽셀 데이터 원본 그대로 사용
+			uint16_t pixel = image[src_index];
 
-            uint16_t r = (y_val >> 3) & 0x1FU;
-			uint16_t g = (y_val >> 2) & 0x3FU;
-			uint16_t b = (y_val >> 3) & 0x1FU;
-
-			uint16_t pixel = (r << 11) | (g << 5) | b;
-
-			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);
-			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU);
+			// LCD로 전송 (Big-Endian 순서)
+			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);   // 상위 바이트
+			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU); // 하위 바이트
 		}
 
-		// 2. 전송할 텍스처 버퍼 캐시 클린 (메모리에 확실히 써지도록 함)
-		SCB_CleanDCache_by_Addr((uint32_t*) display_tx_buffer,
-				DISPLAY_WIDTH * 2U);
 
-		// 3. SPI DMA 전송 시작
+		// 전송할 텍스처 버퍼 캐시 클린 (메모리에 확실히 써지도록 함)
+		SCB_CleanDCache_by_Addr((uint32_t*) display_tx_buffer,
+		DISPLAY_WIDTH * 2U);
+
+		// SPI DMA 전송 시작
 		display_dma_completed = 0;
 		if (HAL_SPI_Transmit_DMA(&hspi2, display_tx_buffer, DISPLAY_WIDTH * 2U)
 				!= HAL_OK) {
@@ -580,7 +663,7 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 			return HAL_ERROR;
 		}
 
-		// 4. DMA 전송이 완료될 때까지 대기
+		// DMA 전송이 완료될 때까지 대기
 		while (display_dma_completed == 0) {
 			// 대기 중 칩셋 부하를 줄이려면 __WFI(); 삽입 가능
 		}
@@ -591,69 +674,7 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 }
 
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
-	if (hspi->Instance == SPI2)
-	{
+	if (hspi->Instance == SPI2) {
 		display_dma_completed = 1;
 	}
 }
-
-//HAL_StatusTypeDef Display_UpdateImage(
-//    const uint16_t *image,
-//    uint16_t width,
-//    uint16_t height
-//)
-//{
-//    HAL_StatusTypeDef status;
-//    uint16_t dst_x;
-//    uint16_t dst_y;
-//    uint32_t src_x;
-//    uint32_t src_y;
-//    uint32_t src_index;
-//    uint16_t pixel;
-//
-//	if (image == NULL || width == 0U || height == 0U)
-//    {
-//        return HAL_ERROR;
-//    }
-//
-//	if ((width > DISPLAY_WIDTH) || (height > DISPLAY_HEIGHT))
-//    {
-//        return HAL_ERROR;
-//    }
-//
-//	status = Display_SetAddressWindow(0U, 0U, DISPLAY_WIDTH - 1U,
-//			DISPLAY_HEIGHT - 1U);
-//    if (status != HAL_OK)
-//    {
-//        return status;
-//    }
-//
-//    DISPLAY_CS_LOW();
-//    DISPLAY_DC_DATA();
-//
-//	for (dst_y = 0U; dst_y < DISPLAY_HEIGHT; dst_y++) {
-//		src_y = ((uint32_t) dst_y * height) / DISPLAY_HEIGHT;
-//
-//		for (dst_x = 0U; dst_x < DISPLAY_WIDTH; dst_x++) {
-//			src_x = ((uint32_t) dst_x * width) / DISPLAY_WIDTH;
-//			src_index = (src_y * width) + src_x;
-//
-//			// 카메라가 이미 RGB565로 주므로 별도의 YUV 변환 없이 픽셀을 그대로 가져옴
-//			pixel = image[src_index];
-//
-//			// 하드웨어 엔디안 및 ILI9341 바이트 오더 매칭 (필요시 바이트 스왑)
-//			// 상위/하위 바이트 배치 조정
-//			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);
-//			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU);
-//		}
-//
-//		status = Display_SPITransmit(display_tx_buffer, DISPLAY_WIDTH * 2U);
-//		if (status != HAL_OK) {
-//			DISPLAY_CS_HIGH();
-//			return status;
-//		}
-//	}
-//
-//    DISPLAY_CS_HIGH();
-//    return HAL_OK;
-//}
