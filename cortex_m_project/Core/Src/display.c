@@ -47,7 +47,7 @@ extern uint8_t current_mode;
  * 만약 이 상태에서 영상만 거꾸로 나온다면 카메라는 정상 장착이라는 뜻이므로
  * 이 값을 0 으로 바꾸면 된다. 오버레이 위치는 영향받지 않는다.
  */
-#define DISPLAY_CAMERA_FLIP_180   1
+#define DISPLAY_CAMERA_FLIP_180   0
 
 /*
  * 512바이트 = RGB565 픽셀 256개
@@ -572,7 +572,7 @@ HAL_StatusTypeDef Display_Init(void)
  * ------------------------------------------------------------------ */
 #if (OVERLAY_USE_APP_GLOBALS == 0)
 
-static volatile float   g_current_fps = 0.0f;
+volatile float g_current_fps = 0.0f;
 static volatile uint8_t g_track_state = (uint8_t)MACHINE_STATE_IDLE;
 
 #endif
@@ -703,7 +703,7 @@ static const uint8_t overlay_font5x7[][OVERLAY_FONT_W] =
 
 
 /* 오버레이 표시 여부 */
-static volatile bool overlay_active = false;
+static volatile bool overlay_active = true;
 
 /*
  * 프레임 단위로 확정되는 값들.
@@ -1184,6 +1184,7 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 			// LCD로 전송 (Big-Endian 순서)
 			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);   // 상위 바이트
 			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU); // 하위 바이트
+
 		}
 
 		// 완성된 영상 스캔라인 위에 오버레이 UI를 덮어씀

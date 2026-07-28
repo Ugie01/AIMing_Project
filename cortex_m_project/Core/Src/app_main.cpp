@@ -15,33 +15,32 @@ extern UART_HandleTypeDef huart1;
 extern I2C_HandleTypeDef hi2c1;
 extern DCMI_HandleTypeDef hdcmi;
 
-#define OV2640_I2C_ADDR (0x30 << 1)  // 8비트 기준 Write 주소
 
+#define OV2640_I2C_ADDR (0x30 << 1)  // 8비트 기준 Write 주소
 #define CROP_W     96
 #define CROP_H     96
 
+#define CROP_RED_COLOR  0xF800
+
+extern volatile float g_current_fps;
+
 ALIGN_32BYTES(static float ai_input_features[CROP_W * CROP_H]);
+ALIGN_32BYTES(static uint16_t crop_buffer[CROP_W * CROP_H]);
 
 extern const float test_features1[];
 extern const float test_features2[];
 
 int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
-	size_t max_size = CROP_W * CROP_H; // 27648
 	for (size_t i = 0; i < length; i++) {
-		if ((offset + i) < max_size) {
-			out_ptr[i] = ai_input_features[offset + i];
-		} else {
-			out_ptr[i] = 0.0f; // 범위 초과 시 0으로 방어
-		}
+		out_ptr[i] = ai_input_features[offset + i];
 	}
 	return 0;
 }
 
-
 // 카메라 원본(frame_buffer)에서 정중앙 96x96을 크롭하여 AI 입력용 float 배열로 변환하는 함수
 void Get_Cropped_AI_Features(const uint16_t *src_image, float *out_features) {
 	uint16_t start_x = (FRAME_W - CROP_W) / 2; // 32
-	uint16_t start_y = (FRAME_H - CROP_H) / 2; // 12[cite: 1]
+	uint16_t start_y = (FRAME_H - CROP_H) / 2; // 12
 
 	for (int y = 0; y < CROP_H; y++) {
 		for (int x = 0; x < CROP_W; x++) {
@@ -52,21 +51,49 @@ void Get_Cropped_AI_Features(const uint16_t *src_image, float *out_features) {
 			// LCD 디스플레이에 찍히는 원본 pixel 값
 			uint16_t pixel = src_image[src_index];
 
-			// 1. RGB565 각 채널 비트 추출
+			// RGB565 각 채널 비트 추출
 			uint32_t r_5 = (pixel >> 11) & 0x1F;
 			uint32_t g_6 = (pixel >> 5) & 0x3F;
 			uint32_t b_5 = pixel & 0x1F;
 
-			// 2. 8비트(0~255) 스케일 확장 (255/31, 255/63 정밀 연산)
+			// 8비트(0~255) 스케일 확장 (255/31, 255/63 정밀 연산)
 			uint32_t r_8 = (r_5 << 3) | (r_5 >> 2);
 			uint32_t g_8 = (g_6 << 2) | (g_6 >> 4);
 			uint32_t b_8 = (b_5 << 3) | (b_5 >> 2);
 
-			// 3. Raw features 규격: 0x00RRGGBB (Red가 상위, Blue가 하위)
+			// Raw features 규격: 0x00RRGGBB (Red가 상위, Blue가 하위)
 			uint32_t hex_val = (r_8 << 16) | (g_8 << 8) | b_8;
 
 			int target_idx = (y * CROP_W + x);
 			out_features[target_idx] = (float) hex_val;
+		}
+	}
+}
+
+// 2. 크롭 픽셀 복사 함수
+void Extract_Crop_Image(const uint16_t *src_image, uint16_t *dst_crop) {
+	uint16_t start_x = (FRAME_W - CROP_W) / 2; // 32
+	uint16_t start_y = (FRAME_H - CROP_H) / 2; // 12
+
+	for (int y = 0; y < CROP_H; y++) {
+		for (int x = 0; x < CROP_W; x++) {
+			uint32_t src_index = ((start_y + y) * FRAME_W) + (start_x + x);
+			dst_crop[y * CROP_W + x] = src_image[src_index];
+		}
+	}
+}
+
+// 5x5 점 그리기 함수
+void Draw_5x5_RedDot(uint16_t *crop_buf, int center_x, int center_y) {
+	for (int dy = -2; dy <= 2; dy++) {
+		for (int dx = -2; dx <= 2; dx++) {
+			int px = center_x + dx;
+			int py = center_y + dy;
+
+			// 96x96 경계를 벗어나지 않도록 안전장치 추가
+			if (px >= 0 && px < CROP_W && py >= 0 && py < CROP_H) {
+				crop_buf[py * CROP_W + px] = 0xF800; // RGB565 RED
+			}
 		}
 	}
 }
@@ -121,15 +148,16 @@ void VisionTask(void) {
 	}
 
 	// FPS 측정을 위한 변수 추가
-	uint32_t frame_count = 0;
 	uint32_t last_tick = HAL_GetTick();
-	uint32_t last_tick2 = HAL_GetTick();
-
 	for (;;) {
 		if (frame_ready) {
-			UART_Printf("VisionTask Stack Free: %lu Words (%lu Bytes)\r\n",
-					vision_stack, vision_stack * 4);
-			frame_count++;      // 프레임 카운트 증가
+//			UART_Printf("VisionTask Stack Free: %lu Words (%lu Bytes)\r\n",
+//					vision_stack, vision_stack * 4);
+
+			uint32_t current_tick = HAL_GetTick();
+			g_current_fps = 1000.0f / (float) (current_tick - last_tick);
+			last_tick = current_tick;
+
 			frame_ready = 0;    // 플래그 초기화
 
 			// 카메라 DMA가 수신한 원본 프레임 버퍼 D-Cache 동기화
@@ -137,13 +165,14 @@ void VisionTask(void) {
 
 			// 중앙 96x96 영역을 AI 입력 버퍼(ai_input_features)로 크롭 및 전처리
 			Get_Cropped_AI_Features(frame_buffer, ai_input_features);
+			Extract_Crop_Image(frame_buffer, crop_buffer);
 
-			// 원본(160x120)을 LCD에 바로 출력
-			if (Display_UpdateImage(frame_buffer, FRAME_W, FRAME_H) != HAL_OK) {
-				Error_Handler();
-			}
 
-			Camera_StartCapture();
+//			// 원본(160x120)을 LCD에 바로 출력
+//			if (Display_UpdateImage(frame_buffer, FRAME_W, FRAME_H) != HAL_OK) {
+//				Error_Handler();
+//			}
+
 
 			// CPU가 가공한 ai_input_features 배열을 RAM에 강제 반영
 			SCB_CleanDCache_by_Addr((uint32_t*) ai_input_features,
@@ -173,39 +202,40 @@ void VisionTask(void) {
 			bool object_detected = false;
 			for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
 				auto bb = result.bounding_boxes[ix];
-
-				uint32_t current_tick = HAL_GetTick();
-				if (current_tick - last_tick2 >= 1000) {
+				if (bb.value >= 0.35f) { // Threshold 조건
 					UART_Printf(
 							"Found '%s' (%.2f) at x: %ld, y: %ld, w: %ld, h: %ld\r\n",
 							bb.label, bb.value, bb.x, bb.y, bb.width,
 							bb.height);
-					last_tick2 = current_tick; // 시간 갱신
+
+					int center_x = bb.x + (bb.width / 2);
+					int center_y = bb.y + (bb.height / 2);
+
+					Draw_5x5_RedDot(crop_buffer, center_x, center_y);
+					object_detected = true;
 				}
-				object_detected = true;
 			}
 
 			if (!object_detected) {
 				UART_Printf("No objects found in this frame.\r\n");
 			}
+
+			SCB_CleanDCache_by_Addr((uint32_t*) crop_buffer,
+					sizeof(crop_buffer));
+			if (Display_UpdateImage(crop_buffer, CROP_W, CROP_H) != HAL_OK) {
+				Error_Handler();
+			}
+
 		}
 
 		// DCMI 하드웨어 에러 발생 시 복구
 		if (hdcmi.State == HAL_DCMI_STATE_ERROR) {
-			UART_Printf("DCMI ERROR 발생!\r\n", frame_count);
+			UART_Printf("DCMI ERROR 발생!\r\n");
 
 			HAL_DCMI_Stop(&hdcmi);
 			hdcmi.State = HAL_DCMI_STATE_READY;
 			frame_ready = 0;
 			Camera_StartCapture();
-		}
-
-		// 1초(1000ms)마다 FPS 출력
-		uint32_t current_tick = HAL_GetTick();
-		if (current_tick - last_tick >= 1000) {
-			UART_Printf("Current FPS: %lu\r\n", frame_count);
-			frame_count = 0;          // 카운트 리셋
-			last_tick = current_tick; // 시간 갱신
 		}
 
 		osDelay(1);
