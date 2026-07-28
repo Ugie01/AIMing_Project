@@ -648,6 +648,9 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 			// LCD로 전송 (Big-Endian 순서)
 			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);   // 상위 바이트
 			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU); // 하위 바이트
+
+//			display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel & 0xFFU);       // 하위 바이트를 먼저 전송
+//			display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel >> 8);   // 상위 바이트를 나중에 전송
 		}
 
 
