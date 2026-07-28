@@ -20,6 +20,35 @@ extern uint8_t current_mode;
 
 #define DISPLAY_SPI_TIMEOUT_MS    1000U
 
+/* ------------------------------------------------------------------
+ * 장착 방향 보정
+ *
+ * LCD 패널이 기구에 180° 돌아간 상태로 붙어 있다. MADCTL 을 landscape
+ * 기본값(0x28)으로 두면 버퍼의 (0,0) 이 실제로는 화면 우측 하단에 찍히므로
+ * 우측 상단에 그린 FPS 가 좌측 하단에 거꾸로 나온다.
+ *
+ * MADCTL 에 MY|MX 를 더해(0xE8) 패널의 스캔 방향 자체를 뒤집으면 소프트웨어는
+ * (0,0) 이 실제 좌측 상단인 좌표계를 그대로 쓸 수 있다. 오버레이든 나중에
+ * 추가할 바운딩 박스든 개별 보정이 필요 없고 CPU 비용도 0 이다.
+ *
+ * ILI9341 MADCTL 비트 : MY 0x80 | MX 0x40 | MV 0x20 | ML 0x10 | BGR 0x08
+ *   0x28 = MV|BGR                 landscape
+ *   0xE8 = MY|MX|MV|BGR           landscape 180° 회전   <-- 현재 사용
+ * ------------------------------------------------------------------ */
+#define DISPLAY_MADCTL_VALUE      0xE8U
+
+/*
+ * 카메라 모듈도 180° 돌아간 상태로 붙어 있다.
+ *
+ * 지금까지는 카메라 뒤집힘과 패널 뒤집힘이 서로 상쇄되어 영상만은 똑바로
+ * 보였다. 위에서 패널을 바로잡았으므로 카메라 쪽 180° 를 여기서 상쇄한다.
+ * 원본을 복사하지 않고 읽는 좌표만 뒤집으므로 역시 추가 비용이 없다.
+ *
+ * 만약 이 상태에서 영상만 거꾸로 나온다면 카메라는 정상 장착이라는 뜻이므로
+ * 이 값을 0 으로 바꾸면 된다. 오버레이 위치는 영향받지 않는다.
+ */
+#define DISPLAY_CAMERA_FLIP_180   0
+
 /*
  * 512바이트 = RGB565 픽셀 256개
  *
@@ -353,12 +382,14 @@ HAL_StatusTypeDef Display_Init(void)
     /*
      * Memory Access Control
      *
-     * 0x48:
-     * - Portrait orientation
+     * 0xE8:
+     * - Landscape orientation (320 x 240)
+     * - 패널이 180° 돌아 장착되어 있어 MY|MX 로 스캔 방향을 뒤집는다
      * - BGR color order
-     * - 240 x 320
+     *
+     * 자세한 내용은 파일 상단 DISPLAY_MADCTL_VALUE 주석 참고
      */
-	data[0] = 0x28U;
+	data[0] = DISPLAY_MADCTL_VALUE;
 
     status = Display_WriteCommandData(ILI9341_CMD_MADCTL,
                                       data,
@@ -1132,8 +1163,19 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width,
 	for (dst_y = 0U; dst_y < DISPLAY_HEIGHT; dst_y++) {
 		src_y = ((uint32_t) dst_y * height) / DISPLAY_HEIGHT;
 
+#if (DISPLAY_CAMERA_FLIP_180 == 1)
+		// 카메라 180° 장착 상쇄 (세로)
+		src_y = (uint32_t) (height - 1U) - src_y;
+#endif
+
 		for (dst_x = 0U; dst_x < DISPLAY_WIDTH; dst_x++) {
 			src_x = ((uint32_t) dst_x * width) / DISPLAY_WIDTH;
+
+#if (DISPLAY_CAMERA_FLIP_180 == 1)
+			// 카메라 180° 장착 상쇄 (가로)
+			src_x = (uint32_t) (width - 1U) - src_x;
+#endif
+
 			src_index = (src_y * width) + src_x;
 
 			// 카메라가 보낸 RGB565 픽셀 데이터 원본 그대로 사용
