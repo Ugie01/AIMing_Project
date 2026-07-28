@@ -2,8 +2,13 @@
 ## 💻 3. `main.c` 활용 예시 코드
 
 분리된 모듈을 STM32 메인 루프에서 어떻게 호출하는지 보여주는 예시입니다.
-
 ```c
+PID_Controller pan_pid;
+PID_Controller tilt_pid;
+
+static float current_x = 500.0f;
+static float current_y = 500.0f;
+
 int main(void)
 {
  
