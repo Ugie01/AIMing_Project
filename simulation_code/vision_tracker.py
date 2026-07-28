@@ -111,6 +111,8 @@ class VisionTracker:
           pixel_distance = np.sqrt((best_cx - self.prev_cx) ** 2 + (best_cy - self.prev_cy) ** 2)
           self.current_speed = pixel_distance / dt  # pixel / sec
 
+          
+
       # 현재 좌표와 시간을 다음 비교를 위해 저장
       self.prev_cx = best_cx
       self.prev_cy = best_cy
