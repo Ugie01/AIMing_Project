@@ -9,11 +9,11 @@ extern "C" {
 #include "main.h"
 
 // 서보모터 각도/CCR 범위 정의
-#define ANGLE_MIN   500   // -90도에 해당하는 CCR 값 (0.5ms)
-#define ANGLE_MID   875  //  0도(중앙)에 해당하는 CCR 값 (1.5ms)
-#define ANGLE_MAX   1250  // +90도에 해당하는 CCR 값 (2.5ms)
-#define IMG_CENTER_X 47.5f
-#define IMG_CENTER_Y 47.5f
+#define ANGLE_MIN   700   // -90도에 해당하는 CCR 값 (0.5ms)
+#define ANGLE_MID   1500  //  0도(중앙)에 해당하는 CCR 값 (1.5ms)
+#define ANGLE_MAX   2400  // +90도에 해당하는 CCR 값 (2.5ms)
+#define IMG_CENTER_X 48.0f
+#define IMG_CENTER_Y 48.0f
 
 // PID 제어기 구조체 정의
 typedef struct {
