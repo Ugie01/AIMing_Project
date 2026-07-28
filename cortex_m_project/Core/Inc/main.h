@@ -57,6 +57,10 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define SERVO_PAN_Pin GPIO_PIN_15
+#define SERVO_PAN_GPIO_Port GPIOA
+#define SERVO_TILT_Pin GPIO_PIN_3
+#define SERVO_TILT_GPIO_Port GPIOB
 #define TFT_LED_Pin GPIO_PIN_12
 #define TFT_LED_GPIO_Port GPIOC
 #define TFT_CS_Pin GPIO_PIN_9

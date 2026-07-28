@@ -712,7 +712,7 @@ static volatile bool overlay_active = true;
  * 화면 위아래가 서로 다른 상태로 섞이지 않도록, 프레임 시작 시점에
  * 한 번만 스냅샷을 떠서 아래 변수에 담아두고 그 값으로만 그린다.
  */
-static uint16_t overlay_cross_color = OVERLAY_COLOR_IDLE;
+uint16_t overlay_cross_color = OVERLAY_COLOR_IDLE;
 static char     overlay_text[OVERLAY_TEXT_MAX];
 static int32_t  overlay_text_x      = 0;
 
