@@ -101,7 +101,7 @@ def main():
 
     auto_tracking = False
     step_size_gimbal = 0.05
-    step_size_target = 0.02  # 시속 100km 고속 설정
+    step_size_target = 0.06  # 0.12 =  시속 21km 설정
     current_target_pos = list(initial_target_pos)
     last_keys = {}
 
