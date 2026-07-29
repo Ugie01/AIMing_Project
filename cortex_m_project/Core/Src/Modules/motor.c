@@ -9,6 +9,7 @@
 static float manual_pan = (float) ANGLE_MID;
 static float manual_tilt = (float) ANGLE_MID;
 
+
 // ==============================================================================
 // 내부 데이터 처리 함수
 // ==============================================================================
@@ -55,6 +56,9 @@ void Motor_ManualProcess(const JoystickInput_t *joy, TIM_HandleTypeDef *htim, ui
     // 현재 각도에 증분을 누적하고 클램핑 적용
     manual_pan = Motor_ClampAngle(manual_pan + (ratio_x * step));
     manual_tilt = Motor_ClampAngle(manual_tilt + (ratio_y * step));
+
+    manual_pan = PAN_STOP_PWM + (ratio_x * 400.0f);
+    manual_pan = Motor_ClampAngle(manual_pan);
 
     // 타이머 CCR(PWM) 레지스터 갱신
     __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_1, (uint32_t ) manual_pan);
@@ -111,24 +115,37 @@ void Motor_PID_Process(PID_Controller *pan_pid, PID_Controller *tilt_pid, TIM_Ha
     __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_2, (uint32_t)tilt_pid->current);
 }
 
-// 화면 내 대상 위치(0~95)를 물리적 모터 각도로 직접 선형 매핑하여 제어하는 함수
+// 화면 내 대상 위치를 기반으로 PID 연산을 수행하는 함수
 void Motor_PID_Process_With_Error(PID_Controller *pan, PID_Controller *tilt, float target_x, float target_y, TIM_HandleTypeDef *htim) {
-    // Pan: 0(우측) -> ANGLE_MIN, 95(좌측) -> ANGLE_MAX 선형 변환
-    float target_pan_ccr = ANGLE_MIN + (target_x / 95.0f) * (ANGLE_MAX - ANGLE_MIN);
-    // Tilt: 0(위쪽) -> ANGLE_MIN, 95(아래쪽) -> ANGLE_MAX 선형 변환
-    float target_tilt_ccr = ANGLE_MIN + (target_y / 95.0f) * (ANGLE_MAX - ANGLE_MIN);
 
-    // 구동 범위 이탈 방지를 위한 클램핑
-    target_pan_ccr = Motor_ClampAngle(target_pan_ccr);
-    target_tilt_ccr = Motor_ClampAngle(target_tilt_ccr);
+    // ==========================================
+    // 1. Pan 축 (360도 연속회전 - 속도 제어)
+    // ==========================================
+    pan->target = VISION_CENTER_X;
 
-    // 구조체 상태 업데이트
-    pan->current = target_pan_ccr;
-    tilt->current = target_tilt_ccr;
+    float pan_speed_offset = PID_Compute(pan, target_x);
 
-    // 서보모터 PWM 갱신
-    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_1, (uint32_t )pan->current);
-    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_2, (uint32_t )tilt->current);
+    // (값이 작아지면 오른쪽, 커지면 왼쪽) 스펙에 맞춤
+    float pan_pwm = PAN_STOP_PWM - pan_speed_offset;
+    pan_pwm = Motor_ClampAngle(pan_pwm);
+
+    // ==========================================
+    // 2. Tilt 축 (180도 위치제어)
+    // ==========================================
+    tilt->target = VISION_CENTER_Y;
+
+    float tilt_angle_delta = PID_Compute(tilt, target_y);
+
+    // 🚨 여기서 누적 변수는 무조건 'manual_tilt'를 사용해야 합니다.
+    // (값이 2300으로 커지면 바닥, 700으로 작아지면 하늘) 스펙에 맞춤
+    manual_tilt -= tilt_angle_delta;
+    manual_tilt = Motor_ClampAngle(manual_tilt);
+
+    // ==========================================
+    // 3. 서보모터 PWM 갱신
+    // ==========================================
+    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_1, (uint32_t )pan_pwm);
+    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_2, (uint32_t )manual_tilt);
 }
 
 // ==============================================================================

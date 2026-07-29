@@ -40,10 +40,6 @@ void HAL_DCMI_ErrorCallback(DCMI_HandleTypeDef *hdcmi) {
     Camera_ClearFrameReady();
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	if (huart->Instance == USART1) {
 
-	}
-}
 
 }

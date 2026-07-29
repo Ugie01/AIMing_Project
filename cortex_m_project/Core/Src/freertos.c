@@ -57,14 +57,14 @@ osThreadId_t VisionTaskHandle;
 const osThreadAttr_t VisionTask_attributes = {
   .name = "VisionTask",
   .stack_size = 8192 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for MotorTask */
 osThreadId_t MotorTaskHandle;
 const osThreadAttr_t MotorTask_attributes = {
   .name = "MotorTask",
   .stack_size = 1024 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for Queue1 */
 osMessageQueueId_t Queue1Handle;
@@ -171,7 +171,7 @@ void StartVisionTask(void *argument)
 void StartMotorTask(void *argument)
 {
   /* USER CODE BEGIN StartMotorTask */
-	MotorTask();
+    MotorTask();
 
   /* Infinite loop */
   for(;;)

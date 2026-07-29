@@ -109,6 +109,15 @@ extern "C" void VisionTask(void) {
 
     uint32_t last_fps_tick = HAL_GetTick();
 
+    // 루프 진입 전, 측정용 변수 선언 및 초기화
+    static uint32_t profiling_start_tick = HAL_GetTick();
+    static uint32_t frame_count = 0;
+    static uint32_t sum_preprocess = 0;
+    static uint32_t sum_inference = 0;
+    static uint32_t sum_postprocess = 0;
+    static uint32_t sum_display = 0;
+    static uint32_t sum_total = 0;
+
     for (;;) {
         if (Camera_IsFrameReady()) {
             uint32_t current_fps_tick = HAL_GetTick();
@@ -118,12 +127,20 @@ extern "C" void VisionTask(void) {
             Camera_ClearFrameReady();
             uint16_t *frame_buf = Camera_GetFrameBuffer();
 
+            // ========================================================
+            // 1. Preprocessing 구간 (캐시 무효화 + 크롭/특징 추출)
+            // ========================================================
+            uint32_t t_start = HAL_GetTick();
+
             SCB_InvalidateDCache_by_Addr((uint32_t*) frame_buf, FRAME_BYTES);
-
             Process_Crop_Image_And_Features(frame_buf, ai_input_features, crop_buffer, 1);
-
             SCB_CleanDCache_by_Addr((uint32_t*) ai_input_features, sizeof(ai_input_features));
 
+            uint32_t t_pre = HAL_GetTick();
+
+            // ========================================================
+            // 2. AI Inference 구간 (Edge Impulse 추론)
+            // ========================================================
             signal_t signal;
             signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
             signal.get_data = &raw_feature_get_data;
@@ -135,12 +152,18 @@ extern "C" void VisionTask(void) {
                 continue;
             }
 
+            uint32_t t_infer = HAL_GetTick();
+
+            // ========================================================
+            // 3. Postprocessing 구간 (결과 파싱 + UI 그리기 + 큐 전송)
+            // ========================================================
             TargetCoord_t target_msg = { 0.0f, 0.0f, 0.0f };
 
             if (result.bounding_boxes_count > 0) {
                 auto best_bb = result.bounding_boxes[0];
                 if (best_bb.value >= 0.35f) {
-                    UART_Printf("Best Target '%s' (%.2f) at x: %ld, y: %ld\r\n", best_bb.label, best_bb.value, best_bb.x, best_bb.y);
+                    // 시간 측정을 위해 매 프레임 UART 출력은 주석 처리 (블로킹 방지)
+                    // UART_Printf("Best Target '%s' (%.2f) at x: %ld, y: %ld\r\n", best_bb.label, best_bb.value, best_bb.x, best_bb.y);
 
                     int center_x = best_bb.x + (best_bb.width / 2);
                     int center_y = best_bb.y + (best_bb.height / 2);
@@ -153,16 +176,56 @@ extern "C" void VisionTask(void) {
                 }
             }
 
-            if (!target_msg.detected) {
-                UART_Printf("No objects found in this frame.\r\n");
-            }
+            // if (!target_msg.detected) {
+            //     UART_Printf("No objects found in this frame.\r\n");
+            // }
 
             osMessageQueuePut(Queue1Handle, &target_msg, 0, 0);
 
+            uint32_t t_post = HAL_GetTick();
+
+            // ========================================================
+            // 4. Display Update 구간 (LCD 출력 및 캐시 클린)
+            // ========================================================
             SCB_CleanDCache_by_Addr((uint32_t*) crop_buffer, sizeof(crop_buffer));
 
             if (Display_UpdateImage(crop_buffer, CROP_W, CROP_H) != HAL_OK) {
                 Error_Handler();
+            }
+
+            uint32_t t_disp = HAL_GetTick();
+
+            // ========================================================
+            // 측정 결과 누적 및 30초마다 평균 출력
+            // ========================================================
+            sum_preprocess += (t_pre - t_start);
+            sum_inference += (t_infer - t_pre);
+            sum_postprocess += (t_post - t_infer);
+            sum_display += (t_disp - t_post);
+            sum_total += (t_disp - t_start);
+            frame_count++;
+
+            // 30초(30000ms) 경과 확인
+            if ((HAL_GetTick() - profiling_start_tick) >= 30000U) {
+                if (frame_count > 0) {
+                    UART_Printf("\r\n=== Vision Task Profiling (Avg over %lu frames) ===\r\n", frame_count);
+                    UART_Printf(" 1. Preprocessing : %lu ms\r\n", sum_preprocess / frame_count);
+                    UART_Printf(" 2. AI Inference  : %lu ms\r\n", sum_inference / frame_count);
+                    UART_Printf(" 3. Postprocess   : %lu ms\r\n", sum_postprocess / frame_count);
+                    UART_Printf(" 4. Display Update: %lu ms\r\n", sum_display / frame_count);
+                    UART_Printf("---------------------------------------------------\r\n");
+                    UART_Printf(" -> Total Time    : %lu ms per frame\r\n", sum_total / frame_count);
+                    UART_Printf("===================================================\r\n\r\n");
+                }
+
+                // 다음 30초 측정을 위해 변수 초기화
+                sum_preprocess = 0;
+                sum_inference = 0;
+                sum_postprocess = 0;
+                sum_display = 0;
+                sum_total = 0;
+                frame_count = 0;
+                profiling_start_tick = HAL_GetTick();
             }
         }
 
