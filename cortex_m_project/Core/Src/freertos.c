@@ -28,6 +28,9 @@
 /* USER CODE BEGIN Includes */
 
 #include "app_main.h"
+#include "task_vision.h"
+#include "task_motor.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
