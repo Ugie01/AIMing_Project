@@ -8,12 +8,22 @@ extern "C" {
 #pragma once
 #include "main.h"
 
+// 카메라 주소
+#define OV2640_I2C_ADDR (0x30 << 1)  // 8비트 기준 Write 주소
+
 // 해상도 설정 (QQVGA 160x120)
 #define FRAME_W       160
 #define FRAME_H       120
 #define FRAME_PIXELS   (FRAME_W * FRAME_H)
 #define FRAME_BYTES    (FRAME_PIXELS * 2)     // 38400 bytes
 #define FRAME_WORDS    (FRAME_BYTES / 4)      // DCMI DMA length in 32-bit words = 9600
+
+// 크롭 이미지 사이즈
+#define CROP_W     96
+#define CROP_H     96
+
+// 객체 포인트 색상
+#define BLUE_DOT_COLOR  0x001F
 
 // 전역 변수 외부 참조 선언
 extern ALIGN_32BYTES(uint16_t frame_buffer[FRAME_PIXELS]);

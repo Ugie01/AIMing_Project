@@ -1,47 +1,53 @@
 #include "app_main.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "cmsis_os.h" // osDelay 등을 쓰기 위해 포함
-#include <stdarg.h> // va_list 사용을 위해 추가
-#include <stdio.h>  // vsprintf 사용을 위해 추가
+#include "cmsis_os.h"
+#include <stdarg.h> // va_list 사용을 위해 추가 -> printf 함수 구현
+#include <stdio.h>  // vsprintf 사용을 위해 추가 -> printf 함수 구현
 #include <string.h>
+
+// 프로젝트 중 개발 헤더파일
 #include "ov2640.h"
 #include "camera.h"
 #include "display.h"
 #include "motor.h"
 #include "joystick.h"
-#include "edge-impulse-sdk/classifier/ei_run_classifier.h" // Edge Impulse 핵심 헤더
 
+// Edge Impulse 헤더파일
+#include "edge-impulse-sdk/classifier/ei_run_classifier.h"
+
+// 각 통신 포트 선언
 extern TIM_HandleTypeDef htim2;
 extern UART_HandleTypeDef huart1;
 extern I2C_HandleTypeDef hi2c1;
 extern DCMI_HandleTypeDef hdcmi;
+// 태스크간 통신에 사용할 큐 선언
+extern osMessageQueueId_t Queue1Handle;
 
-#define OV2640_I2C_ADDR (0x30 << 1)  // 8비트 기준 Write 주소
-#define CROP_W     96
-#define CROP_H     96
-
-#define CROP_BLUE_COLOR  0x001F
 
 PID_Controller pan_pid;
 PID_Controller tilt_pid;
 
+// AI 모델에 넣을 크롭된 이미지
 ALIGN_32BYTES(static float ai_input_features[CROP_W * CROP_H]);
 ALIGN_32BYTES(static uint16_t crop_buffer[CROP_W * CROP_H]);
 
-extern uint16_t overlay_cross_color;
+// 오버레이로 표시할 FPS 및 상태 데이터
 volatile float g_current_fps = 0.0f;
 volatile uint8_t g_track_state = (uint8_t) MACHINE_STATE_IDLE;
+// 오버레이 크로스헤어 상태 변수
+extern uint16_t overlay_cross_color;
 
+// 테스트 이미지 배열 (FOMO 모델 raw features)
 extern const float test_features1[];
 extern const float test_features2[];
-extern osMessageQueueId_t Queue1Handle;
 
+// 서보 모터 관련 상수
 #define STEP_SIZE 25
 #define MOTOR_TASK_PERIOD_MS   20U
 int tilt_toggle_state = 0;
 
-uint8_t rx_data;             // 시리얼 수신 버퍼 1바이트
+// 서보 모터 pan, tilt 초기 각도를 중앙으로 초기화
 uint16_t pan_val = ANGLE_MID;  // 초기 Pan 각도 (중앙)
 uint16_t tilt_val = ANGLE_MID; // 초기 Tilt 각도 (중앙)
 
@@ -52,6 +58,7 @@ typedef struct {
 	float detected; // 1.0f: 객체 있음, 0.0f: 객체 없음
 } TargetCoord_t;
 
+// 객체 인식 모델에 들어갈 이미지 추출 함수
 int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
 	for (size_t i = 0; i < length; i++) {
 		out_ptr[i] = ai_input_features[offset + i];
@@ -59,75 +66,60 @@ int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
 	return 0;
 }
 
+/**
+ * @brief 카메라 원본 이미지에서 central 96x96 영역을 크롭하고,
+ *        LCD 출력용(RGB565)과 AI 입력용(float 0x00RRGGBB) 데이터를 동시에 생성합니다.
+ * @param src_image 원본 카메라 프레임 버퍼 (RGB565)
+ * @param out_features AI 입력용 float 배열
+ * @param dst_crop LCD 디스플레이용 크롭 버퍼 (RGB565)
+ * @param enable_preprocessing true: Red 강조 전처리 적용 / false: 패스스루
+ */
 // 카메라 원본(frame_buffer)에서 정중앙 96x96을 크롭하여 AI 입력용 float 배열로 변환하는 함수
-void Get_Cropped_AI_Features(const uint16_t *src_image, float *out_features) {
-	uint16_t start_x = (FRAME_W - CROP_W) / 2; // 32
-	uint16_t start_y = (FRAME_H - CROP_H) / 2; // 12
+void Process_Crop_Image_And_Features(const uint16_t *src_image, float *out_features, uint16_t *dst_crop, uint8_t enable_preprocessing) {
+    const uint16_t start_x = (FRAME_W - CROP_W) / 2; // 32
+    const uint16_t start_y = (FRAME_H - CROP_H) / 2; // 12
 
-	for (int y = 0; y < CROP_H; y++) {
-		for (int x = 0; x < CROP_W; x++) {
-			uint32_t src_x = start_x + x;
-			uint32_t src_y = start_y + y;
-			uint32_t src_index = (src_y * FRAME_W) + src_x;
+    for (int y = 0; y < CROP_H; y++) {
+        // 원본 프레임의 Y축 시작 주소 계산 (반복 곱셈 제거)
+        const uint32_t src_row_offset = (start_y + y) * FRAME_W + start_x;
+        const int target_row_offset = y * CROP_W;
 
-// LCD 디스플레이에 찍히는 원본 pixel 값
-			uint16_t pixel = src_image[src_index];
+        for (int x = 0; x < CROP_W; x++) {
+            uint16_t pixel = src_image[src_row_offset + x];
 
-// RGB565 각 채널 비트 추출
-			uint32_t r_5 = (pixel >> 11) & 0x1F;
-			uint32_t g_6 = (pixel >> 5) & 0x3F;
-			uint32_t b_5 = pixel & 0x1F;
+            // RGB565 분리
+            uint32_t r_5 = (pixel >> 11) & 0x1F;
+            uint32_t g_6 = (pixel >> 5) & 0x3F;
+            uint32_t b_5 = pixel & 0x1F;
 
-// 8비트(0~255) 스케일 확장 (255/31, 255/63 정밀 연산)
-			uint32_t r_8 = (r_5 << 3) | (r_5 >> 2);
-			uint32_t g_8 = (g_6 << 2) | (g_6 >> 4);
-			uint32_t b_8 = (b_5 << 3) | (b_5 >> 2);
+            // 8비트(0~255) 스케일 변환
+            uint32_t r_8 = (r_5 << 3) | (r_5 >> 2);
+            uint32_t g_8 = (g_6 << 2) | (g_6 >> 4);
+            uint32_t b_8 = (b_5 << 3) | (b_5 >> 2);
 
-// Red 계열 픽셀 강제 대비 연산 (Thresholding/Enhancement)
-// Red 값이 일정 수준(예: 100) 이상이고 Green/Blue보다 명확히 큰 경우
-			if (r_8 > 100 && r_8 > (g_8 + 30) && r_8 > (b_8 + 30)) {
-				r_8 = 255;  // Red 성분을 완전 빨강(최대치)으로 끌어올림
-				g_8 = 0;    // Green, Blue를 떨어뜨려 대비 극대화
-				b_8 = 0;
-			}
+            uint16_t crop_pixel = pixel;
 
-// Raw features 규격: 0x00RRGGBB (Red가 상위, Blue가 하위)
-			uint32_t hex_val = (r_8 << 16) | (g_8 << 8) | b_8;
+            // 전처리 (Red 강조 알고리즘) ON/OFF 제어
+            if (enable_preprocessing) {
+                if (r_8 > 150 && r_8 > (g_8 + 60) && r_8 > (b_8 + 60)) {
+                    // Red 성분 극대화
+                    r_8 = 255;
+                    g_8 = 0;
+                    b_8 = 0;
+                    crop_pixel = 0xF800; // LCD용 RGB565 Pure Red
+                }
+            }
 
-			int target_idx = (y * CROP_W + x);
-			out_features[target_idx] = (float) hex_val;
-		}
-	}
-}
+            int target_idx = target_row_offset + x;
 
-// 크롭 픽셀 복사 함수
-void Extract_Crop_Image(const uint16_t *src_image, uint16_t *dst_crop) {
-	uint16_t start_x = (FRAME_W - CROP_W) / 2;
-	uint16_t start_y = (FRAME_H - CROP_H) / 2;
+            // LCD용 버퍼 출력
+            dst_crop[target_idx] = crop_pixel;
 
-	for (int y = 0; y < CROP_H; y++) {
-		for (int x = 0; x < CROP_W; x++) {
-			uint32_t src_index = ((start_y + y) * FRAME_W) + (start_x + x);
-			uint16_t pixel = src_image[src_index];
-
-// RGB565 분리
-			uint16_t r_5 = (pixel >> 11) & 0x1F;
-			uint16_t g_6 = (pixel >> 5) & 0x3F;
-			uint16_t b_5 = pixel & 0x1F;
-
-// 8비트 스케일 변환
-			uint8_t r_8 = (r_5 << 3) | (r_5 >> 2);
-			uint8_t g_8 = (g_6 << 2) | (g_6 >> 4);
-			uint8_t b_8 = (b_5 << 3) | (b_5 >> 2);
-
-// Red 강조 조건문
-			if (r_8 > 100 && r_8 > (g_8 + 30) && r_8 > (b_8 + 30)) {
-				pixel = 0xF800; // RGB565 완전 빨강으로 덮어쓰기
-			}
-
-			dst_crop[y * CROP_W + x] = pixel;
-		}
-	}
+            // AI 입력용 float 출력 (0x00RRGGBB 포맷)
+            uint32_t hex_val = (r_8 << 16) | (g_8 << 8) | b_8;
+            out_features[target_idx] = (float) hex_val;
+        }
+    }
 }
 
 // 5x5 점 그리기 함수
@@ -137,14 +129,15 @@ void Draw_5x5_BlueDot(uint16_t *crop_buf, int center_x, int center_y) {
 			int px = center_x + dx;
 			int py = center_y + dy;
 
-// 96x96 경계를 벗어나지 않도록 안전장치 추가
+			// 96x96 경계를 벗어나지 않도록 안전장치 추가
 			if (px >= 0 && px < CROP_W && py >= 0 && py < CROP_H) {
-				crop_buf[py * CROP_W + px] = CROP_BLUE_COLOR; // RGB565 BLUE (0x001F)
+				crop_buf[py * CROP_W + px] = BLUE_DOT_COLOR; // RGB565 BLUE
 			}
 		}
 	}
 }
 
+// UART1 시리얼 프린트 (printf 함수와 동일하게 동작)
 void UART_Printf(const char *format, ...) {
 	char loc_buf[256];
 	va_list args;
@@ -160,136 +153,135 @@ void UART_Printf(const char *format, ...) {
 
 extern "C" {
 
+// Camera + AI + LCD
 void VisionTask(void) {
-// 하드웨어 리셋
+    // 태스크 여유 스택 확인
+    UART_Printf(" VisionTask Running inference...\r\n");
+    UBaseType_t vision_stack = uxTaskGetStackHighWaterMark(NULL);
+
+    // ov2640 활성화
 	HAL_GPIO_WritePin(CAM_PWDN_GPIO_Port, CAM_PWDN_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_RESET);
 	osDelay(30);
 	HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_SET);
 	osDelay(20);
 
-// BSP 함수로 ID 읽기 테스트
+	// ov2640 모듈 ID 확인
 	uint16_t pid = ov2640_ReadID(OV2640_I2C_ADDR);
 	if (pid != OV2640_ID) { // 0x26
 		UART_Printf("OV2640 Check Failed! Read ID = 0x%02X\r\n", pid);
-		while (1)
-			;
+		return Error_Handler();
 	}
 	UART_Printf("OV2640 Connected! ID = 0x%02X\r\n", pid);
 
-// BSP 함수로 카메라 레지스터 및 해상도 초기화 (QQVGA 160x120)
+	// 카메라 레지스터 및 해상도 초기화 (QQVGA 160x120)
 	ov2640_Init(OV2640_I2C_ADDR, CAMERA_R160x120);
 
-// 초기 모드 적용 (1: RGB 모드, 0: Grayscale 모드)
+	// 초기 모드 적용 (1: RGB 모드, 0: Grayscale 모드)
 	Camera_SetMode(current_mode);
 
-// 캡처 시작
+	// 캡처 시작
 	Camera_StartCapture();
 	UART_Printf("Start Capture...\r\n");
 
-	UART_Printf(" VisionTask Running inference...\r\n");
-	UBaseType_t vision_stack = uxTaskGetStackHighWaterMark(NULL);
 
+	// ILI9341(LCD) 초기화
 	if (Display_Init() != HAL_OK) {
 		Error_Handler();
 	}
 
-// FPS 측정을 위한 변수 추가
-	uint32_t last_tick = HAL_GetTick();
+	// FPS 측정을 위한 변수 추가
+    uint32_t last_fps_tick = HAL_GetTick();
 	for (;;) {
 		if (frame_ready) {
 //			UART_Printf("VisionTask Stack Free: %lu Words (%lu Bytes)\r\n",
 //					vision_stack, vision_stack * 4);
 
-			uint32_t current_tick = HAL_GetTick();
-			g_current_fps = 1000.0f / (float) (current_tick - last_tick);
-			last_tick = current_tick;
+            uint32_t current_fps_tick = HAL_GetTick();
+            g_current_fps = 1000.0f / (float) (current_fps_tick - last_fps_tick);
+            last_fps_tick = current_fps_tick;
 
-			frame_ready = 0;    // 플래그 초기화
+			// 플래그 초기화
+			frame_ready = 0;
 
-// 카메라 DMA가 수신한 원본 프레임 버퍼 D-Cache 동기화
+            // 카메라 DMA 수신 버퍼 D-Cache Invalidate (RAM -> CPU 읽기)
 			SCB_InvalidateDCache_by_Addr((uint32_t*) frame_buffer, FRAME_BYTES);
 
-// 중앙 96x96 영역을 AI 입력 버퍼(ai_input_features)로 크롭 및 전처리
-			Get_Cropped_AI_Features(frame_buffer, ai_input_features);
-			Extract_Crop_Image(frame_buffer, crop_buffer);
+            // 96 * 96 크롭 + 전처리(ON/OFF 제어) + 두 버퍼 동시에 생성
+            // 네 번째 인자에 true를 넣으면 전처리 실행, false를 넣으면 원본 크롭만 수행
+            uint8_t use_preprocess = 1;
+            Process_Crop_Image_And_Features(frame_buffer, ai_input_features, crop_buffer, use_preprocess);
 
 //			// 원본(160x120)을 LCD에 바로 출력
 //			if (Display_UpdateImage(frame_buffer, FRAME_W, FRAME_H) != HAL_OK) {
 //				Error_Handler();
 //			}
 
-// CPU가 가공한 ai_input_features 배열을 RAM에 강제 반영
-			SCB_CleanDCache_by_Addr((uint32_t*) ai_input_features,
-					sizeof(ai_input_features));
+            // CPU가 새로 생성한 ai_input_features를 RAM으로 Flush (CPU -> RAM/NPU 전달)
+            SCB_CleanDCache_by_Addr((uint32_t*) ai_input_features, sizeof(ai_input_features));
 
-// AI 추론 신호 구조체 설정
+			// AI 추론 신호 구조체 설정
 			signal_t signal;
-			signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
-			signal.get_data = &raw_feature_get_data;
+            signal.total_length = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE; // 입력 데이터 총 크기 (예: 96x96 = 9216)
+            signal.get_data = &raw_feature_get_data;                  // 데이터를 읽어올 함수(콜백) 등록
 
 			ei_impulse_result_t result = { 0 };
 
-// 추론 실행
+            // AI 모델 추론 실행
 			EI_IMPULSE_ERROR res = run_classifier(&signal, &result, false);
 			if (res != 0) {
-				UART_Printf("Failed to run classifier (Error code: %d)\r\n",
-						res);
-				osDelay(1000);
+                UART_Printf("Failed to run classifier (Error code: %d)\r\n", res);
 				continue;
 			}
 
-// Performance Timing 출력
-			UART_Printf("Timing: DSP %d ms, inference %d ms\r\n",
-					result.timing.dsp, result.timing.classification);
+//            // Performance Timing 출력
+//			UART_Printf("Timing: DSP %d ms, inference %d ms\r\n",
+//					result.timing.dsp, result.timing.classification);
 
-// 큐로 넘겨줄 데이터 구조체 변수 생성
+            // 큐로 넘겨줄 데이터 구조체 변수 생성
 			TargetCoord_t target_msg = { 0.0f, 0.0f, 0.0f };
-			bool object_detected = false;
 
-// 검출된 객체가 최소 1개 이상 존재할 때
+            // 검출된 객체가 최소 1개 이상 존재할 때
 			if (result.bounding_boxes_count > 0) {
-// 배열의 첫 번째(0번) 요소가 가장 신뢰도가 높음
+                // 배열의 첫 번째(0번) 요소가 가장 신뢰도가 높은 객체
 				auto best_bb = result.bounding_boxes[0];
 
-// Threshold(0.35) 조건 만족 여부 확인
+                // Threshold(0.35) 조건 만족 여부 확인
 				if (best_bb.value >= 0.35f) {
-					UART_Printf(
-							"Best Target '%s' (%.2f) at x: %ld, y: %ld, w: %ld, h: %ld\r\n",
-							best_bb.label, best_bb.value, best_bb.x, best_bb.y,
-							best_bb.width, best_bb.height);
+                    UART_Printf("Best Target '%s' (%.2f) at x: %ld, y: %ld, w: %ld, h: %ld\r\n",
+                            best_bb.label, best_bb.value, best_bb.x, best_bb.y,
+                            best_bb.width, best_bb.height);
 
 					int center_x = best_bb.x + (best_bb.width / 2);
 					int center_y = best_bb.y + (best_bb.height / 2);
 
-// 파란색 점 그리기
+                    // 타겟 좌쵸 파란색 점 그리기
 					Draw_5x5_BlueDot(crop_buffer, center_x, center_y);
 
-// 가장 신뢰도 높은 객체 좌표 담기
+                    // 가장 신뢰도 높은 객체 좌표 담기
 					target_msg.x = (float) center_x;
 					target_msg.y = (float) center_y;
 					target_msg.detected = 1.0f; // 객체 있음
 
-					object_detected = true;
 				}
 			}
 
-			if (!object_detected) {
+            if (!target_msg.detected) {
 				UART_Printf("No objects found in this frame.\r\n");
 			}
 
 			osMessageQueuePut(Queue1Handle, &target_msg, 0, 0);
 
-			SCB_CleanDCache_by_Addr((uint32_t*) crop_buffer,
-					sizeof(crop_buffer));
+            SCB_CleanDCache_by_Addr((uint32_t*) crop_buffer, sizeof(crop_buffer));
+
 			if (Display_UpdateImage(crop_buffer, CROP_W, CROP_H) != HAL_OK) {
 				Error_Handler();
 			}
 		}
 
-// DCMI 하드웨어 에러 발생 시 복구
+        // DCMI 하드웨어 에러 발생 시 복구
 		if (hdcmi.State == HAL_DCMI_STATE_ERROR) {
-			UART_Printf("DCMI ERROR 발생!\r\n");
+            UART_Printf("** DCMI ERROR 발생 **\r\n");
 
 			HAL_DCMI_Stop(&hdcmi);
 			hdcmi.State = HAL_DCMI_STATE_READY;
@@ -301,28 +293,33 @@ void VisionTask(void) {
 	}
 }
 
+// 서보모터 + 조이스틱
 void MotorTask(void) {
 	UART_Printf(" MotorTask Running inference...\r\n");
 	UBaseType_t motor_stack = uxTaskGetStackHighWaterMark(NULL);
 
+    // 서보모터 팬(ch1), 틸트(ch2) PWM 활성화
 	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
 	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
 
+    // 팬, 틸트 각각의 PID 값 초기화 (PID 값 수정 x)
 	PID_Init(&pan_pid, 0.5f, 0.00f, 0.0f, ANGLE_MID);
 	PID_Init(&tilt_pid, 0.5f, 0.00f, 0.0f, ANGLE_MID);
 
-	pan_val = ANGLE_MID;
-	tilt_val = ANGLE_MID;
+    // PWM 값 초기 값 (ANGLE MID)
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pan_val);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, tilt_val);
 
+    // 조이스틱 초기화
 	Joystick_Init();
 	Motor_ManualSetPosition((float) ANGLE_MID, (float) ANGLE_MID);
 
+    // 큐를 통해 받을 타겟 구조체
 	TargetCoord_t rx_msg;
+
+    // 조이스틱 구조체
 	JoystickInput_t joy;
 
-	HAL_UART_Receive_IT(&huart1, &rx_data, 1);
 
 	for (;;) {
 //		UART_Printf("MotorTask Stack Free: %lu Words (%lu Bytes)\r\n",
@@ -344,7 +341,7 @@ void MotorTask(void) {
 				tilt_val = (uint16_t) tilt_now;
 				pan_pid.current = pan_now;
 				tilt_pid.current = tilt_now;
-//
+
 				g_track_state = (uint8_t) MACHINE_STATE_IDLE;
 				UART_Printf("Mode -> AUTO\r\n");
 
@@ -409,48 +406,9 @@ void HAL_DCMI_ErrorCallback(DCMI_HandleTypeDef *hdcmi) {
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-//	if (huart->Instance == USART1) {
-//		// 입력받은 문자(rx_data)에 따른 Pan/Tilt 값 조정
-//		if (rx_data == 'w' || rx_data == 'W') {
-//			tilt_val += STEP_SIZE; // 위쪽 (Tilt 증가)
-//		} else if (rx_data == 's' || rx_data == 'S') {
-//			tilt_val -= STEP_SIZE; // 아래쪽 (Tilt 감소)
-//		} else if (rx_data == 'a' || rx_data == 'A') {
-//			pan_val += STEP_SIZE;  // 오른쪽 (Pan 증가)
-//		} else if (rx_data == 'd' || rx_data == 'D') {
-//
-//			pan_val -= STEP_SIZE;  // 왼쪽 (Pan 감소)
-//		} else if (rx_data == 't' || rx_data == 'T') {
-//			if (tilt_toggle_state == 0) {
-//				tilt_val = 500;
-//				tilt_toggle_state = 1;
-//			} else {
-//				tilt_val = 1250;
-//				tilt_toggle_state = 0;
-//			}
-//		}
-//
-//		// 서보모터 안전 범위 제한 (500 ~ 2500) 강제 적용
-////		if (pan_val > ANGLE_MAX)
-////			pan_val = ANGLE_MAX;
-////		if (pan_val < ANGLE_MIN)
-////			pan_val = ANGLE_MIN;
-////		if (tilt_val > ANGLE_MAX)
-////			tilt_val = ANGLE_MAX;
-////		if (tilt_val < ANGLE_MIN)
-////			tilt_val = ANGLE_MIN;
-//
-//		// 실제 타이머 CCR 값 갱신 (TIM2 채널 1: Pan, 채널 2: Tilt)
-//		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pan_val);
-//		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, tilt_val);
-//
-//		// 디버깅용 현재 값 출력
-//		UART_Printf("WASD Input [%c] -> Pan: %d, Tilt: %d\r\n", rx_data,
-//				pan_val, tilt_val);
-//
-//		// 다음 1바이트 수신을 위해 인터럽트 재활성화
-//		HAL_UART_Receive_IT(&huart1, &rx_data, 1);
-//	}
+	if (huart->Instance == USART1) {
+
+	}
 }
 
 }

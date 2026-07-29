@@ -16,30 +16,11 @@ ALIGN_32BYTES(uint16_t frame_buffer[FRAME_PIXELS]);
 volatile uint8_t frame_ready = 0;
 uint8_t current_mode = 1; // 0: Grayscale, 1: RGB
 
-// --------------------------------------------------
 // 카메라 DMA 캡처 시작 함수
-// --------------------------------------------------
 void Camera_StartCapture(void) {
 	HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_CONTINUOUS, (uint32_t) frame_buffer,
 	FRAME_WORDS);
 }
-
-// --------------------------------------------------
-// 카메라 모드 설정 함수
-// --------------------------------------------------
-
-//// YUV 모드
-//void Camera_SetMode(uint8_t is_rgb) {
-//	current_mode = is_rgb;
-//
-//	if (current_mode == 1) {
-//		// RGB 컬러 모드 (Normal)
-//		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_NORMAL, 0);
-//	} else {
-//		// Grayscale 흑백 모드 (BW)
-//		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_BW, 0);
-//	}
-//}
 
 //// rgb565 모드
 void Camera_SetMode(uint8_t is_rgb) {
@@ -70,7 +51,7 @@ void Camera_SetMode(uint8_t is_rgb) {
 }
 
 // --------------------------------------------------
-// 파이썬 뷰어로 1프레임 데이터 전송 함수
+// 파이썬 뷰어로 1프레임 데이터 전송 함수 (UART)
 // --------------------------------------------------
 void Camera_SendFrameToPC(void) {
 	// D-Cache Clean (Flush)
@@ -95,3 +76,16 @@ void Camera_SendFrameToPC(void) {
 	frame_ready = 0;
 	Camera_StartCapture();
 }
+
+//// YUV 모드
+//void Camera_SetMode(uint8_t is_rgb) {
+//	current_mode = is_rgb;
+//
+//	if (current_mode == 1) {
+//		// RGB 컬러 모드 (Normal)
+//		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_NORMAL, 0);
+//	} else {
+//		// Grayscale 흑백 모드 (BW)
+//		ov2640_Config(0x60, CAMERA_BLACK_WHITE, CAMERA_BLACK_WHITE_BW, 0);
+//	}
+//}
