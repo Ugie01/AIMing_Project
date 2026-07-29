@@ -57,6 +57,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define RASER_Pin GPIO_PIN_4
+#define RASER_GPIO_Port GPIOD
 #define SERVO_PAN_Pin GPIO_PIN_15
 #define SERVO_PAN_GPIO_Port GPIOA
 #define SERVO_TILT_Pin GPIO_PIN_3
