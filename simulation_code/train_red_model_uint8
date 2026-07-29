@@ -20,7 +20,7 @@ def representative_dataset_gen(test_img_dir):
         yield [input_data]
 
 # --- 1단계: 시뮬레이션 맞춤형 데이터셋 생성 및 폴더 분할 저장 (지평선 배경 + 부정 샘플 30%) ---
-def create_or_verify_dataset(dataset_dir="./synthetic_red_dataset", num_samples=5000, img_size=95):
+def create_or_verify_dataset(dataset_dir="./simulation_code/synthetic_red_dataset", num_samples=2500, img_size=95):
     test_img_dir = os.path.join(dataset_dir, "test", "images")
     if os.path.exists(test_img_dir) and len(os.listdir(test_img_dir)) > 0:
         print("📦 [1단계] 기존에 분할된 데이터셋이 존재합니다. 로드를 진행합니다.")
@@ -51,8 +51,8 @@ def create_or_verify_dataset(dataset_dir="./synthetic_red_dataset", num_samples=
         has_target = 0.0 if random.random() < 0.3 else 1.0
         
         if has_target > 0.0:
-            obj_w = random.randint(2, 40)
-            obj_h = random.randint(2, 40)
+            obj_w = random.randint(10, 40)
+            obj_h = random.randint(10, 40)
             
             x1 = random.randint(0, max(0, img_size - obj_w))
             y1 = random.randint(0, max(0, img_size - obj_h))
@@ -148,9 +148,8 @@ def main():
     # 💡 데이터셋 폴더명을 빨간색용으로 변경
     dataset_dir = "./synthetic_red_dataset"
     img_size = 95
-    sam_num=10000
-    print(f"{sam_num}")
-    create_or_verify_dataset(dataset_dir, num_samples=sam_num, img_size=img_size)
+    
+    create_or_verify_dataset(dataset_dir, num_samples=2500, img_size=img_size)
     
     print("🔄 [2단계] Train 및 Val 데이터를 로드 중입니다...")
     X_train, y_train = load_data_from_folder(os.path.join(dataset_dir, "train", "images"), os.path.join(dataset_dir, "train", "labels"), img_size)
@@ -184,23 +183,23 @@ def main():
     )
 
     # --- 4단계: TFLite 변환 및 저장 ---
-    print("\n⚙️ [4단계] TFLite 모델로 변환 및 저장 중...")
+    print("\n⚙️ [4단계] TFLite(uint8) 모델로 변환 및 저장 중...")
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    tflite_model = converter.convert()
-
     # converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    # converter.representative_dataset = lambda: representative_dataset_gen(test_img_dir)
-    # converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-    # converter.inference_input_type = tf.float32   # 필요에 따라 tf.uint8로 변경 가능
-    # converter.inference_output_type = tf.float32  # 필요에 따라 tf.uint8로 변경 가능
+    # tflite_model = converter.convert()
+
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.representative_dataset = lambda: representative_dataset_gen(test_img_dir)
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    converter.inference_input_type = tf.float32   # 필요에 따라 tf.uint8로 변경 가능
+    converter.inference_output_type = tf.float32  # 필요에 따라 tf.uint8로 변경 가능
         
-    # tflite_quantized_model = converter.convert()
+    tflite_quantized_model = converter.convert()
 
     # 💡 저장되는 모델 파일명을 red_detector.tflite로 변경
-    tflite_path = "red_detector.tflite"
+    tflite_path = "red_detector_uint8.tflite"
     with open(tflite_path, "wb") as f:
-        f.write(tflite_model)
+        f.write(tflite_quantized_model)
 
     print(f"🎉 성공! 시뮬레이션 맞춤형 TFLite 파일이 저장되었습니다: '{os.path.abspath(tflite_path)}'")
 

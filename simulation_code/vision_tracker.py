@@ -30,7 +30,7 @@ class VisionTracker:
 
   def __init__(
       self,
-      model_path="simulation_code/red_detector.tflite",
+      model_path="red_detector_uint8.tflite",
       kp=0.001,
       ki=0.0,
       kd=0.0002,

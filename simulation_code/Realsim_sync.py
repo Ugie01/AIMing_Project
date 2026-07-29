@@ -95,7 +95,10 @@ def main():
 
     # --- [STM32 20ms 제어 주기 및 SG90 물리 속도 한계 설정] ---
     CONTROL_PERIOD = 0.02  # 20ms (50Hz) 인터럽트 주기
+    AI_INFERENCE_PERIOD = 0.14
+
     last_control_time = time.time()
+    last_ai_time = time.time()
 
     SG90_MAX_SPEED_DEG_PER_SEC = 600.0  # 초당 최대 600도 (0.1s / 60 deg)
     MAX_STEP_DEG = SG90_MAX_SPEED_DEG_PER_SEC * CONTROL_PERIOD  # 20ms당 최대 이동 한계 (~12도)
@@ -105,15 +108,49 @@ def main():
     prev_pan_cmd = gimbal.pan_angle
     prev_tilt_cmd = gimbal.tilt_angle
 
+    has_target = False
+    current_speed = 0.0
+    current_conf = 0.0
+    processed_frame = None
+
     try:
         while True:
             p.stepSimulation()
-
             current_time = time.time()
-            elapsed_time = current_time - last_control_time
 
-            # STM32 제어 주기(20ms) 동기화 루프
-            if elapsed_time >= CONTROL_PERIOD:
+            # ==============================================================
+            # 1. STM32 AI 연산 주기 (140ms) : 이미지 입력 및 모델 추론, 타겟 위치 갱신
+            # ==============================================================
+            if current_time - last_ai_time >= AI_INFERENCE_PERIOD:
+                last_ai_time = current_time
+
+                # 카메라 위치 동기화 및 이미지 캡처
+                cam_pos, cam_target, cam_up = gimbal.update_camera_pose()
+                view_matrix = p.computeViewMatrix(cameraEyePosition=cam_pos, cameraTargetPosition=cam_target, cameraUpVector=cam_up)
+                proj_matrix = p.computeProjectionMatrixFOV(fov=68, aspect=1.0, nearVal=0.1, farVal=100.0)
+
+                width, height, rgbImg, _, _ = p.getCameraImage(width=160, height=120, viewMatrix=view_matrix, projectionMatrix=proj_matrix)
+                frame = np.reshape(rgbImg, (height, width, 4)).astype(np.uint8)
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+
+                # 비전 추적 및 오차 연산 (TFLite 추론 포함)
+                has_target, pan_adj, tilt_adj, processed_frame = tracker.process_frame(frame)
+                error_x = getattr(tracker, 'last_error_x', 0.0)
+                error_y = getattr(tracker, 'last_error_y', 0.0)
+
+                current_speed = getattr(tracker, 'current_speed', 0.0)
+                current_conf = getattr(tracker, 'confidence', 0.0)
+
+                # 비전 도메인 노이즈 주입
+                if has_target:
+                    noise_std = 0.5  
+                    pan_adj += np.random.normal(0, noise_std * 0.0001)
+                    tilt_adj += np.random.normal(0, noise_std * 0.0001)
+
+            # ==============================================================
+            # 2. STM32 모터 제어 주기 (20ms) : 기존 제어 및 속도 제한 로직 유지[cite: 6]
+            # ==============================================================
+            if current_time - last_control_time >= CONTROL_PERIOD:
                 last_control_time = current_time
 
                 # 트랙바 값 읽기
@@ -132,7 +169,7 @@ def main():
                 tracker.tilt_pid.ki = current_ki
                 tracker.tilt_pid.kd = current_kd
 
-                # 1. 키보드 입력 처리
+                # 키보드 입력 처리
                 keys = p.getKeyboardEvents()
                 for key, value in keys.items():
                     if value & p.KEY_IS_DOWN or value & p.KEY_WAS_TRIGGERED:
@@ -157,34 +194,7 @@ def main():
                 p.resetBasePositionAndOrientation(targetId, current_target_pos, [0, 0, 0, 1])
                 last_keys = keys
 
-                # 2. 카메라 위치 동기화 및 이미지 캡처
-                cam_pos, cam_target, cam_up = gimbal.update_camera_pose()
-                view_matrix = p.computeViewMatrix(cameraEyePosition=cam_pos, cameraTargetPosition=cam_target, cameraUpVector=cam_up)
-                proj_matrix = p.computeProjectionMatrixFOV(fov=68, aspect=1.0, nearVal=0.1, farVal=100.0)
-
-                width, height, rgbImg, _, _ = p.getCameraImage(width=160, height=120, viewMatrix=view_matrix, projectionMatrix=proj_matrix)
-                frame = np.reshape(rgbImg, (height, width, 4)).astype(np.uint8)
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-
-                # 3. 비전 추적 및 오차 연산
-                has_target, pan_adj, tilt_adj, processed_frame = tracker.process_frame(frame)
-                error_x = getattr(tracker, 'last_error_x', 0.0)
-                error_y = getattr(tracker, 'last_error_y', 0.0)
-
-                # 💡 VisionTracker 객체에서 계산된 값들을 바로 가져옴 (최소 수정)
-                current_speed = getattr(tracker, 'current_speed', 0.0)
-                current_conf = getattr(tracker, 'confidence', 0.0)
-
-                # ==========================================
-                #  비전 도메인 노이즈 주입 (Gaussian Noise)
-                # ==========================================
-                # 오차 값(픽셀 또는 조정값 단위)에 미세한 가우스 노이즈를 섞어 센서/인식 흔들림 모사
-                if has_target:
-                    noise_std = 0.5  # 픽셀 단위 또는 미세 조정값 기준 노이즈 강도
-                    pan_adj += np.random.normal(0, noise_std * 0.0001)
-                    tilt_adj += np.random.normal(0, noise_std * 0.0001)
-
-                # 4. 모드별 원시 목표 각도 산출
+                # 모드별 목표 각도 산출 (140ms마다 갱신된 pan_adj, tilt_adj 활용)
                 if auto_tracking and has_target:
                     desired_pan = gimbal.pan_angle - pan_adj
                     desired_tilt = gimbal.tilt_angle - tilt_adj
@@ -193,7 +203,7 @@ def main():
                     desired_tilt = gimbal.tilt_angle
                     pan_adj, tilt_adj = 0.0, 0.0
 
-                # --- [핵심] 수동/자동 구분 없이 모터 물리 속도 한계(Rate Limiting) 강제 적용 ---
+                # 모터 물리 속도 한계(Rate Limiting) 적용
                 pan_diff = desired_pan - prev_pan_cmd
                 tilt_diff = desired_tilt - prev_tilt_cmd
 
@@ -208,16 +218,19 @@ def main():
 
                 gimbal.set_target_angles(gimbal.pan_angle, gimbal.tilt_angle)
 
-                # UI 텍스트 오버레이
-                if auto_tracking and has_target:
-                    cv2.putText(processed_frame, "MODE: AUTO TRACKING", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                else:
-                    mode_text = "MODE: MANUAL" if not auto_tracking else "MODE: AUTO (TARGET LOST)"
-                    cv2.putText(processed_frame, mode_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                # UI 디스플레이 갱신
+                if processed_frame is not None:
+                    display_frame = processed_frame.copy()
+                    if auto_tracking and has_target:
+                        cv2.putText(display_frame, "MODE: AUTO TRACKING (140ms)", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    else:
+                        mode_text = "MODE: MANUAL" if not auto_tracking else "MODE: AUTO (TARGET LOST)"
+                        cv2.putText(display_frame, mode_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    cv2.imshow(cam_window_name, display_frame)
 
                 debug_board = np.zeros((280, 450, 3), dtype=np.uint8)
                 texts = [
-                    f"[STM32 + SG90 + 30g Dynamics]",
+                    f"[STM32 + SG90 + 140ms AI Cycle]",
                     f"  KP: {current_kp:.5f} | KI: {current_ki:.5f} | KD: {current_kd:.5f}",
                     f"[System Status]",
                     f"  Mode   : {'AUTO TRACKING' if auto_tracking else 'MANUAL'} (Target: {has_target})",
@@ -235,15 +248,7 @@ def main():
                     cv2.putText(debug_board, t, (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
                     y_offset += 22
 
-                cv2.imshow(cam_window_name, processed_frame)
                 cv2.imshow(debug_window_name, debug_board)
-
-                # ==========================================
-                #  통신 지연 및 제어 지터(Jitter) 부여
-                # ==========================================
-                # 기본 20ms 주기에 ±2~3ms(±0.002~0.003초) 무작위 편차를 적용하여 타이밍 흔들림 모사
-                jitter = random.uniform(-0.0025, 0.0025)
-                CONTROL_PERIOD = 0.02 + jitter
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
