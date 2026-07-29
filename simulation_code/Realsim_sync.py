@@ -47,21 +47,37 @@ def main():
     #     baseOrientation=[0, 0, 0, 1],
     # )
 
-    #사람 형태
-    # 예시: 가로 50cm, 세로 25cm, 높이 170cm 크기의 사람 형태일 경우
+   # 큐브 형태
+    #예시: 가로 50cm, 세로 25cm, 높이 170cm 크기의 사람 형태일 경우
     initial_target_pos = [0.2, 0.6, 0.1]
-    target_visual = p.createVisualShape(
-        p.GEOM_BOX, 
-        halfExtents=[0.25, 0.125, 0.85],  # 👈 이 부분을 원하는 크기의 절반 값으로 수정
-        rgbaColor=[1, 0, 0, 1]
-    )
+    half_extents = [0.25, 0.25, 0.25]
+
+    # 1. 충돌체와 시각체를 모두 생성
+    target_collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+    target_visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=[1, 0, 0, 1])
+
+    # 2. 두 개를 모두 포함하여 멀티바디 생성
     targetId = p.createMultiBody(
         baseMass=0.0,
+        baseCollisionShapeIndex=target_collision,  # 👈 충돌체 추가!
         baseVisualShapeIndex=target_visual,
         basePosition=initial_target_pos,
         baseOrientation=[0, 0, 0, 1],
     )
-    #=====================================================
+    # 타겟 물체 크기를 빨간 네모 크기([0.005, 0.01, 0.01])와 똑같이 설정
+    # initial_target_pos = [0.2, 0.6, 0.1]
+    # target_visual = p.createVisualShape(
+    #     p.GEOM_BOX, 
+    #     halfExtents=[0.005, 0.01, 0.01],  # 👈 빨간 네모와 정확히 동일한 크기
+    #     rgbaColor=[1, 0, 0, 1]  # 타겟
+    # )
+    # targetId = p.createMultiBody(
+    #     baseMass=0.0,
+    #     baseVisualShapeIndex=target_visual,
+    #     basePosition=initial_target_pos,
+    #     baseOrientation=[0, 0, 0, 1],
+    # )
+    # #=====================================================
     print("🟢 초록색 타겟 큐브가 생성되었습니다.")
     print("=== 조작 안내 ===")
     print(" [방향키 (←/→/↑/↓)] : 짐벌 수동 조작 (Pan/Tilt)")
@@ -79,17 +95,17 @@ def main():
     cv2.namedWindow(debug_window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(debug_window_name, 450, 250)
 
-    cv2.createTrackbar("KP x10000", debug_window_name, 3, 100, nothing)
+    cv2.createTrackbar("KP x10000", debug_window_name, 20, 100, nothing)
     cv2.createTrackbar("KI x10000", debug_window_name, 0, 50, nothing)
-    cv2.createTrackbar("KD x100000", debug_window_name, 0, 50, nothing)
+    cv2.createTrackbar("KD x100000", debug_window_name, 1, 50, nothing)
 
     auto_tracking = False
     step_size_gimbal = 0.05
-    step_size_target = 0.12  # 시속 100km 고속 설정
+    step_size_target = 0.02  # 시속 100km 고속 설정
     current_target_pos = list(initial_target_pos)
     last_keys = {}
 
-    current_kp, current_ki, current_kd = 0.0003, 0.0, 0.0
+    current_kp, current_ki, current_kd = 0.0020, 0.0, 0.00001
     error_x, error_y = 0.0, 0.0
     pan_adj, tilt_adj = 0.0, 0.0
 
@@ -112,6 +128,9 @@ def main():
     current_speed = 0.0
     current_conf = 0.0
     processed_frame = None
+    
+    # [추가] 레이저 라인 ID 추적 변수 초기화
+    laser_line_id = -1
 
     try:
         while True:
@@ -218,6 +237,10 @@ def main():
 
                 gimbal.set_target_angles(gimbal.pan_angle, gimbal.tilt_angle)
 
+                # ======= [수정] 잔상 없는 10m 레이저 갱신 =======
+                hit_target, laser_line_id = gimbal.update_laser_beam(targetId, laser_line_id)
+                
+                # ==============================================================
                 # UI 디스플레이 갱신
                 if processed_frame is not None:
                     display_frame = processed_frame.copy()
@@ -234,6 +257,7 @@ def main():
                     f"  KP: {current_kp:.5f} | KI: {current_ki:.5f} | KD: {current_kd:.5f}",
                     f"[System Status]",
                     f"  Mode   : {'AUTO TRACKING' if auto_tracking else 'MANUAL'} (Target: {has_target})",
+                    f"  Laser  : {'🔥 TARGET HIT!' if hit_target else '--- (Scanning)'}",
                     f"  Conf   : {current_conf:.2f}",
                     f"[Target Motion & Error]",
                     f"  Speed  : {current_speed:.1f} px/s",
