@@ -13,9 +13,9 @@ extern "C" {
 // ==============================================================================
 
 // 서보모터 PWM CCR 범위
-#define ANGLE_MIN   700     // 최소 각도 (0.700ms)
+#define ANGLE_MIN   900     // 최소 각도 (0.900ms)
 #define ANGLE_MID   1500    // 중앙 각도 (1.500ms)
-#define ANGLE_MAX   2400    // 최대 각도 (2.400ms)
+#define ANGLE_MAX   2100    // 최대 각도 (2.100ms)
 
 // 카메라 이미지 중심 좌표 (96x96 해상도 기준)
 #define IMG_CENTER_X 48.0f
@@ -23,6 +23,41 @@ extern "C" {
 
 // MANUAL 모드 조이스틱 최대 이동 속도 (CCR/초)
 #define MANUAL_SPEED_PER_SEC   400.0f
+
+// 모터마다 물리적 마찰력 떄문에 최소 PWM 데드존
+#define PAN_MIN_POWER 50.0f
+
+// 비전 데이터 크롭 영역의 중심점 (96x96 기준)
+#define VISION_CENTER_X 48.0f
+#define VISION_CENTER_Y 48.0f
+
+// 360도 서보모터 정지 PWM 값
+#define PAN_STOP_PWM 1500.0f
+
+// 기존 카메라 중심점 (48, 48)
+#define CAMERA_CENTER_X 48.0f
+#define CAMERA_CENTER_Y 48.0f
+
+// 레이저와 카메라 사이의 물리적 위치 차이로 인한 픽셀 오프셋
+// 예: 레이저가 카메라보다 오른쪽에 있고 위쪽에 있다면 오프셋 설정
+#define LASER_OFFSET_X  0.0f  // (픽셀 단위 오프셋)
+#define LASER_OFFSET_Y  +5.0f
+
+// 최종 PID 목표점
+#define LASER_TARGET_X (CAMERA_CENTER_X + LASER_OFFSET_X)
+#define LASER_TARGET_Y (CAMERA_CENTER_Y + LASER_OFFSET_Y)
+
+// ==============================================================================
+// 🎯 [하이퍼파라미터] 레이저 추적 및 순찰(Patrol) 설정 영역
+// ==============================================================================
+// 1. 대기/순찰 (IDLE) 설정
+#define PATROL_STEP_ANGLE       1.0f   // [속도] 순찰 시 1프레임당 Pan 이동량 (서보 CCR 기준, 높을수록 빠름)
+#define PATROL_PAN_MIN          700.0f // [범위] 좌측 최대 순찰 각도
+#define PATROL_PAN_MAX          2400.0f // [범위] 우측 최대 순찰 각도
+
+// 2. 발사 (LOCKON) 설정
+#define LOCKON_ERROR_MARGIN     10.0f    // [정밀도] 타겟 중심과 레이저 타겟 간의 최대 허용 오차 (픽셀 단위)
+#define LOCKON_MAINTAIN_COUNT   3       // [시간] 오차 범위 내에 몇 프레임 연속 머물러야 레이저를 발사할지 (3프레임 = 약 0.4초)
 
 // ==============================================================================
 // 구조체 정의

@@ -7,6 +7,7 @@
 // HAL 핸들 선언
 extern UART_HandleTypeDef huart1;
 extern DCMI_HandleTypeDef hdcmi;
+extern osSemaphoreId_t cameraFrameSemHandle;
 
 // UART1 시리얼 프린트 (전역 유틸리티)
 void UART_Printf(const char *format, ...) {
@@ -18,7 +19,7 @@ void UART_Printf(const char *format, ...) {
     va_end(args);
 
     if (len > 0) {
-        HAL_UART_Transmit(&huart1, (uint8_t*) loc_buf, (uint16_t) len, HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart1, (uint8_t*) loc_buf, (uint16_t) len, 1000);
     }
 }
 
@@ -31,7 +32,10 @@ void app_main(void) {
 
 // DCMI 프레임 수신 완료 콜백 함수
 void HAL_DCMI_FrameEventCallback(DCMI_HandleTypeDef *hdcmi) {
-    Camera_SetFrameReady();
+    if (cameraFrameSemHandle != NULL) {
+        // 🚀 인터럽트 안에서 세마포어 릴리즈 (Task를 깨움)
+        osSemaphoreRelease (cameraFrameSemHandle);
+    }
 }
 
 // 에러 발생 시 강제 복구 콜백 함수
@@ -40,10 +44,6 @@ void HAL_DCMI_ErrorCallback(DCMI_HandleTypeDef *hdcmi) {
     Camera_ClearFrameReady();
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	if (huart->Instance == USART1) {
 
-	}
-}
 
 }

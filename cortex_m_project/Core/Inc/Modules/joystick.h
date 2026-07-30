@@ -26,6 +26,9 @@ void Joystick_Init(void);
 // 조이스틱 2축 아날로그 값 폴링 및 버튼 디바운스 처리 (약 20ms 주기 호출 권장)
 void Joystick_Read(JoystickInput_t *out);
 
+void Joystick_Start_DMA(void);
+void Joystick_Stop_DMA(void);
+
 #ifdef __cplusplus
 }
 #endif

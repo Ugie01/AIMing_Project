@@ -57,19 +57,24 @@ osThreadId_t VisionTaskHandle;
 const osThreadAttr_t VisionTask_attributes = {
   .name = "VisionTask",
   .stack_size = 8192 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for MotorTask */
 osThreadId_t MotorTaskHandle;
 const osThreadAttr_t MotorTask_attributes = {
   .name = "MotorTask",
   .stack_size = 1024 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for Queue1 */
 osMessageQueueId_t Queue1Handle;
 const osMessageQueueAttr_t Queue1_attributes = {
   .name = "Queue1"
+};
+/* Definitions for cameraFrameSem */
+osSemaphoreId_t cameraFrameSemHandle;
+const osSemaphoreAttr_t cameraFrameSem_attributes = {
+  .name = "cameraFrameSem"
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -107,6 +112,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
+
+  /* Create the semaphores(s) */
+  /* creation of cameraFrameSem */
+  cameraFrameSemHandle = osSemaphoreNew(1, 1, &cameraFrameSem_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -171,7 +180,7 @@ void StartVisionTask(void *argument)
 void StartMotorTask(void *argument)
 {
   /* USER CODE BEGIN StartMotorTask */
-	MotorTask();
+    MotorTask();
 
   /* Infinite loop */
   for(;;)
