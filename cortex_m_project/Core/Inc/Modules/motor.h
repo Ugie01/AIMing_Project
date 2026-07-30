@@ -13,9 +13,9 @@ extern "C" {
 // ==============================================================================
 
 // 서보모터 PWM CCR 범위
-#define ANGLE_MIN   700     // 최소 각도 (0.700ms)
+#define ANGLE_MIN   900     // 최소 각도 (0.900ms)
 #define ANGLE_MID   1500    // 중앙 각도 (1.500ms)
-#define ANGLE_MAX   2400    // 최대 각도 (2.400ms)
+#define ANGLE_MAX   2100    // 최대 각도 (2.100ms)
 
 // 카메라 이미지 중심 좌표 (96x96 해상도 기준)
 #define IMG_CENTER_X 48.0f

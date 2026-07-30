@@ -26,6 +26,8 @@ static uint16_t joystick_center_y = 2048U;
 static bool joystick_button_stable = false; // 확정된 버튼 상태
 static bool joystick_button_last = false;   // 직전 버튼 원시 입력
 static uint8_t joystick_button_count = 0U;  // 연속 일치 카운트
+static volatile uint16_t adc_dma_buffer[2]; // X, Y축 DMA 수신 버퍼
+static bool is_adc_dma_running = false;
 
 // ==============================================================================
 // 내부 데이터 처리 함수
@@ -33,27 +35,11 @@ static uint8_t joystick_button_count = 0U;  // 연속 일치 카운트
 
 // ADC1을 폴링하여 X(Rank1), Y(Rank2) 아날로그 원시값 측정
 static bool Joystick_SampleRaw(uint16_t *raw_x, uint16_t *raw_y) {
-    bool ok = false;
-
-    if (HAL_ADC_Start(&hadc1) != HAL_OK) {
-        return false;
-    }
-
-    // Rank 1 (X축) 읽기
-    if (HAL_ADC_PollForConversion(&hadc1, JOYSTICK_ADC_TIMEOUT_MS) == HAL_OK) {
-        *raw_x = (uint16_t) HAL_ADC_GetValue(&hadc1);
-
-        // Rank 2 (Y축) 읽기
-        if (HAL_ADC_PollForConversion(&hadc1, JOYSTICK_ADC_TIMEOUT_MS) == HAL_OK) {
-            *raw_y = (uint16_t) HAL_ADC_GetValue(&hadc1);
-            ok = true;
-        }
-    }
-
-    // 시퀀서 엉킴(X, Y 뒤바뀜) 방지를 위해 성공/실패 무관하게 ADC 정지
-    (void) HAL_ADC_Stop(&hadc1);
-
-    return ok;
+    SCB_InvalidateDCache_by_Addr((uint32_t*) adc_dma_buffer, sizeof(adc_dma_buffer));
+    // DMA가 백그라운드에서 실시간으로 버퍼를 갱신하므로 대기 없이 즉시 읽음
+    *raw_x = adc_dma_buffer[0]; // Rank 1 (X축)
+    *raw_y = adc_dma_buffer[1]; // Rank 2 (Y축)
+    return true;
 }
 
 // ADC 원시값을 중립값과 데드존을 적용하여 ±JOYSTICK_AXIS_MAX 로 정규화
@@ -94,36 +80,41 @@ static int16_t Joystick_Normalize(uint16_t raw, uint16_t center) {
 // 외부 공개 API 함수
 // ==============================================================================
 
-// 조이스틱 초기화 (오프셋 캘리브레이션 및 중립값 산출)
 void Joystick_Init(void) {
-    uint32_t sum_x = 0U, sum_y = 0U;
-    uint32_t taken = 0U;
+    joystick_button_stable = (HAL_GPIO_ReadPin(JOY_SW_GPIO_Port, JOY_SW_Pin) == GPIO_PIN_RESET);
+    joystick_button_last = joystick_button_stable;
+    joystick_button_count = 0U;
+}
 
-    // STM32H7 특성상 오프셋 오차 제거를 위해 캘리브레이션 필수 수행
+// 수동 제어 시작 시 호출할 DMA 시작 함수 (기존 Init의 캘리브레이션 내용을 가져옴)
+void Joystick_Start_DMA(void) {
+    uint32_t sum_x = 0U, sum_y = 0U;
+
     if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_CALIB_OFFSET, ADC_SINGLE_ENDED) != HAL_OK) {
         Error_Handler();
     }
 
-    // 부팅 시 스틱을 놓은 상태라고 가정하고 다중 샘플링
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc_dma_buffer, 2);
+    HAL_Delay(10); // DMA 첫 데이터 대기
+
     for (uint32_t i = 0U; i < JOYSTICK_CALIB_SAMPLES; i++) {
         uint16_t raw_x, raw_y;
         if (Joystick_SampleRaw(&raw_x, &raw_y)) {
             sum_x += raw_x;
             sum_y += raw_y;
-            taken++;
         }
+        HAL_Delay(1);
     }
+    joystick_center_x = (uint16_t) (sum_x / JOYSTICK_CALIB_SAMPLES);
+    joystick_center_y = (uint16_t) (sum_y / JOYSTICK_CALIB_SAMPLES);
 
-    // 샘플링 평균값으로 중립 오프셋 업데이트 (1번이라도 성공했을 경우)
-    if (taken > 0U) {
-        joystick_center_x = (uint16_t) (sum_x / taken);
-        joystick_center_y = (uint16_t) (sum_y / taken);
-    }
+    is_adc_dma_running = true; // 플래그 ON
+}
 
-    // 초기 버튼 상태 업데이트 (부팅 직후 헛눌림 엣지 발생 방지, Active-Low)
-    joystick_button_stable = (HAL_GPIO_ReadPin(JOY_SW_GPIO_Port, JOY_SW_Pin) == GPIO_PIN_RESET);
-    joystick_button_last = joystick_button_stable;
-    joystick_button_count = 0U;
+// 수동 제어 종료 시 호출할 DMA 정지 함수
+void Joystick_Stop_DMA(void) {
+    HAL_ADC_Stop_DMA(&hadc1);
+    is_adc_dma_running = false; // 플래그 OFF
 }
 
 // 현재 조이스틱의 X/Y 좌표 및 스위치 상태를 읽어 out 구조체에 반환
@@ -137,11 +128,13 @@ void Joystick_Read(JoystickInput_t *out) {
         return;
 
     // 아날로그 축 읽기 및 정규화
-    if (Joystick_SampleRaw(&raw_x, &raw_y)) {
-        out->x = Joystick_Normalize(raw_x, joystick_center_x);
-        out->y = Joystick_Normalize(raw_y, joystick_center_y);
+    if (is_adc_dma_running) {
+        if (Joystick_SampleRaw(&raw_x, &raw_y)) {
+            out->x = Joystick_Normalize(raw_x, joystick_center_x);
+            out->y = Joystick_Normalize(raw_y, joystick_center_y);
+        }
     } else {
-        // 변환 에러 시 모터가 튀는 현상을 막기 위해 중립(0) 처리
+        // 수동 모드가 아닐 때는 조이스틱 값이 튀지 않도록 0으로 고정
         out->x = 0;
         out->y = 0;
     }

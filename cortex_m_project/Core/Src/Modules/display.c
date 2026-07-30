@@ -85,7 +85,7 @@
 extern SPI_HandleTypeDef hspi2;
 
 // SPI 통신용 송신 버퍼 (SRAM)
-static uint8_t display_tx_buffer[DISPLAY_TX_BUFFER_SIZE];
+ALIGN_32BYTES(static uint8_t display_tx_buffer[2][DISPLAY_TX_BUFFER_SIZE]);
 
 // SPI DMA 전송 완료 대기 플래그
 volatile uint8_t display_dma_completed = 0;
@@ -95,6 +95,14 @@ static volatile bool overlay_active = true;
 static uint16_t overlay_cross_color = OVERLAY_COLOR_IDLE;
 static char overlay_text[OVERLAY_TEXT_MAX];
 static int32_t overlay_text_x = 0;
+
+// ==============================================================================
+// 🚀 스케일링 연산 최소화를 위한 룩업 테이블 (LUT)
+// ==============================================================================
+static uint32_t lut_x[DISPLAY_WIDTH];
+static uint32_t lut_y[DISPLAY_HEIGHT];
+static uint16_t last_width = 0;
+static uint16_t last_height = 0;
 
 // ==============================================================================
 // 내부 구조체 및 폰트 데이터 정의
@@ -277,7 +285,7 @@ static void Overlay_FillSpan(uint8_t *line, int32_t x, int32_t width, uint16_t c
     }
 }
 
-// 스캔라인 상에 사각형 그리기 (외곽선 대응)
+// 스캔라인 상에 사각형 그리기
 static void Overlay_DrawRectLine(uint8_t *line, int32_t y, const OverlayRect_t *rect, int32_t grow, uint16_t color) {
     int32_t rect_y      = (int32_t)rect->y - grow;
     int32_t rect_height = (int32_t)rect->h + (2 * grow);
@@ -485,11 +493,12 @@ HAL_StatusTypeDef Display_Init(void) {
     return HAL_OK;
 }
 
-// 1프레임 이미지를 LCD로 SPI DMA 전송 (YUV 모드 제거, RGB565 모드 최적화)
+// 1프레임 이미지를 LCD로 SPI DMA 전송 (RGB565 모드 최적화 + 핑퐁 버퍼 + LUT 스케일링 적용)
 HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width, uint16_t height) {
     HAL_StatusTypeDef status;
     uint16_t dst_x, dst_y;
-    uint32_t src_x, src_y, src_index;
+    uint32_t src_index;
+    uint8_t buf_idx = 0;
 
     if (image == NULL || width == 0U || height == 0U)
         return HAL_ERROR;
@@ -510,45 +519,68 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width, uin
     if (overlay_active)
         Overlay_BeginFrame();
 
-    for (dst_y = 0U; dst_y < DISPLAY_HEIGHT; dst_y++) {
-        src_y = ((uint32_t) dst_y * height) / DISPLAY_HEIGHT;
+    // ==============================================================================
+    // LUT(룩업 테이블) 생성 및 업데이트 로직 (해상도가 바뀔 때만 1회 연산)
+    // ==============================================================================
+    if ((width != last_width) || (height != last_height)) {
+        // Y 좌표 매핑 및 width 곱셈 미리 계산 (src_y * width)
+        for (dst_y = 0U; dst_y < DISPLAY_HEIGHT; dst_y++) {
+            uint32_t src_y = ((uint32_t) dst_y * height) / DISPLAY_HEIGHT;
 #if (DISPLAY_CAMERA_FLIP_180 == 1)
-        src_y = (uint32_t) (height - 1U) - src_y;
+            src_y = (uint32_t) (height - 1U) - src_y;
 #endif
+            lut_y[dst_y] = src_y * width;
+        }
 
+        // X 좌표 매핑 계산
         for (dst_x = 0U; dst_x < DISPLAY_WIDTH; dst_x++) {
-            src_x = (uint32_t) (width - 1U) - (((uint32_t) dst_x * width) / DISPLAY_WIDTH);
+            uint32_t src_x = (uint32_t) (width - 1U) - (((uint32_t) dst_x * width) / DISPLAY_WIDTH);
 #if (DISPLAY_CAMERA_FLIP_180 == 1)
             src_x = (uint32_t) (width - 1U) - src_x;
 #endif
-            src_index = (src_y * width) + src_x;
-            uint16_t pixel = image[src_index];
-
-            // Big-Endian 포맷으로 변환 후 버퍼 삽입
-            display_tx_buffer[dst_x * 2U] = (uint8_t) (pixel >> 8);
-            display_tx_buffer[(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU);
+            lut_x[dst_x] = src_x;
         }
 
-        // 스캔라인 오버레이 합성
+        last_width = width;
+        last_height = height;
+    }
+
+    display_dma_completed = 1;
+
+    for (dst_y = 0U; dst_y < DISPLAY_HEIGHT; dst_y++) {
+        // 루프 밖에서 현재 줄의 Y 오프셋을 한 번만 가져옴
+        uint32_t src_y_offset = lut_y[dst_y];
+
+        for (dst_x = 0U; dst_x < DISPLAY_WIDTH; dst_x++) {
+            // 나눗셈/곱셈 없이 더하기 연산 1번으로 인덱스 도출
+            src_index = src_y_offset + lut_x[dst_x];
+            uint16_t pixel = image[src_index];
+
+            display_tx_buffer[buf_idx][dst_x * 2U] = (uint8_t) (pixel >> 8);
+            display_tx_buffer[buf_idx][(dst_x * 2U) + 1U] = (uint8_t) (pixel & 0xFFU);
+        }
+
         if (overlay_active)
-            Overlay_RenderLine(display_tx_buffer, dst_y);
+            Overlay_RenderLine(display_tx_buffer[buf_idx], dst_y);
 
-        // DMA 전송을 위한 캐시 동기화
-        SCB_CleanDCache_by_Addr((uint32_t*) display_tx_buffer, DISPLAY_WIDTH * 2U);
+        SCB_CleanDCache_by_Addr((uint32_t*) display_tx_buffer[buf_idx], DISPLAY_WIDTH * 2U);
 
-        // 1스캔라인 DMA 전송 실행
+        while (display_dma_completed == 0) {
+        }
         display_dma_completed = 0;
-        if (HAL_SPI_Transmit_DMA(&hspi2, display_tx_buffer, DISPLAY_WIDTH * 2U) != HAL_OK) {
+
+        if (HAL_SPI_Transmit_DMA(&hspi2, display_tx_buffer[buf_idx], DISPLAY_WIDTH * 2U) != HAL_OK) {
             DISPLAY_CS_HIGH();
             return HAL_ERROR;
         }
 
-        // 전송 대기
-        while (display_dma_completed == 0) {
-        }
+        buf_idx ^= 1;
     }
 
+    while (display_dma_completed == 0) {
+    }
     DISPLAY_CS_HIGH();
+
     return HAL_OK;
 }
 

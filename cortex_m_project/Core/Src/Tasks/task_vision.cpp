@@ -10,6 +10,7 @@
 #include "edge-impulse-sdk/classifier/ei_run_classifier.h"
 
 extern DCMI_HandleTypeDef hdcmi;
+extern osSemaphoreId_t cameraFrameSemHandle;
 
 // AI 입력 및 크롭 버퍼 전역 변수 은닉화
 ALIGN_32BYTES(static float ai_input_features[CROP_W * CROP_H]);
@@ -17,7 +18,7 @@ ALIGN_32BYTES(static uint16_t crop_buffer[CROP_W * CROP_H]);
 static volatile float current_fps = 0.0f;
 
 // 기본 설정 모드 (원하는 모드로 초기값 설정 가능)
-static volatile PreprocessMode_t current_prep_mode = PREPROCESS_HSV;
+static volatile PreprocessMode_t current_prep_mode = PREPROCESS_NONE;
 
 // Getter 구현
 float Vision_GetCurrentFPS(void) {
@@ -60,40 +61,47 @@ static inline void Preprocess_SimpleRGB(uint8_t r, uint8_t g, uint8_t b, uint16_
 // [Mode 2] HSV 정밀 Red 마스킹 및 배경 무채색화 전처리
 static inline void Preprocess_HSV_Red(uint8_t r, uint8_t g, uint8_t b, uint16_t raw_pixel, uint8_t *out_r, uint8_t *out_g, uint8_t *out_b,
         uint16_t *out_crop) {
-    uint8_t max_val = (r > g) ? ((r > b) ? r : b) : ((g > b) ? g : b);
-    uint8_t min_val = (r < g) ? ((r < b) ? r : b) : ((g < b) ? g : b);
-    uint8_t diff = max_val - min_val;
 
-    uint16_t hue = 0;
-    uint8_t sat = (max_val == 0) ? 0 : (255 * diff / max_val);
+    bool is_red = false;
 
-    if (diff > 0) {
-        if (max_val == r) {
-            int32_t h_calc = (int32_t) (60 * (g - b)) / diff;
-            if (h_calc < 0)
-                h_calc += 360;
-            hue = (uint16_t) h_calc;
-        } else if (max_val == g) {
-            hue = (uint16_t) (60 * (b - r) / diff + 120);
-        } else {
-            hue = (uint16_t) (60 * (r - g) / diff + 240);
+    // 밝기(Value) 조건 및 Red가 가장 큰 값인지 확인
+    // (Hue가 0 부근이려면 무조건 r이 max_val이어야 함을 이용해 불필요한 연산 제거)
+    if ((r > 60) && (r >= g) && (r >= b)) {
+        uint8_t min_val = (g < b) ? g : b;
+        uint8_t diff = r - min_val;
+
+        if (diff > 0) {
+            // Saturation 조건: (255 * diff / max_val) > 110
+            // -> 나눗셈을 없애기 위해 양변에 max_val(여기서는 r)을 곱한 조건식으로 변경
+            if ((255 * (uint16_t) diff) > (110 * (uint16_t) r)) {
+
+                // Hue 조건: h_calc <= 10 또는 h_calc >= 348 (음수로는 -12)
+                // 원래 공식: h_calc = 60 * (g - b) / diff
+                // -> 나눗셈을 없애기 위해 양변에 diff를 곱한 조건식으로 변경: -12 * diff <= 60 * (g - b) <= 10 * diff
+                int32_t h_term = 60 * ((int32_t) g - (int32_t) b);
+
+                if ((h_term <= (10 * (int32_t) diff)) && (h_term >= (-12 * (int32_t) diff))) {
+                    is_red = true;
+                }
+            }
         }
     }
 
-    // Red 조건 (Hue: 0~10 or 348~360, Saturation > 110, Brightness > 60)
-    if ((hue <= 10 || hue >= 348) && sat > 110 && max_val > 60) {
+    if (is_red) {
         *out_r = 255;
         *out_g = 0;
         *out_b = 0;
-        *out_crop = 0xF800;
+        *out_crop = 0xF800; // RED
     } else {
-        // 배경 무채색(Grayscale) 처리
-        uint8_t gray = (uint8_t) (0.299f * r + 0.587f * g + 0.114f * b);
+        // 배경 무채색화 (Grayscale)
+        // 기존 0.299f, 0.587f 등 Float 연산을 비트 시프트 정수 근사치로 변경하여 FPU 오버헤드 제거
+        uint8_t gray = (uint8_t) ((r * 77 + g * 150 + b * 29) >> 8);
+
         *out_r = gray;
         *out_g = gray;
         *out_b = gray;
         *out_crop = raw_pixel;
-        // 참고: LCD 디스플레이 화면도 흑백으로 보려면 아래 주석을 해제하세요.
+        // 디스플레이도 흑백으로 보려면 아래 주석 해제
         // *out_crop = ((gray >> 3) << 11) | ((gray >> 2) << 5) | (gray >> 3);
     }
 }
@@ -204,7 +212,7 @@ extern "C" void VisionTask(void) {
     static uint32_t sum_total = 0;
 
     for (;;) {
-        if (Camera_IsFrameReady()) {
+        if (osSemaphoreAcquire(cameraFrameSemHandle, 1000U) == osOK) {
             uint32_t current_fps_tick = HAL_GetTick();
             current_fps = 1000.0f / (float) (current_fps_tick - last_fps_tick);
             last_fps_tick = current_fps_tick;
@@ -217,8 +225,14 @@ extern "C" void VisionTask(void) {
             // ========================================================
             uint32_t t_start = HAL_GetTick();
 
-            SCB_InvalidateDCache_by_Addr((uint32_t*) frame_buf, FRAME_BYTES);
+            const uint16_t start_y = (FRAME_H - CROP_H) / 2;
+            uint32_t crop_start_offset = ((start_y * FRAME_W)) * sizeof(uint16_t);
+            uint32_t crop_effective_bytes = CROP_H * FRAME_W * sizeof(uint16_t);
+
+            SCB_InvalidateDCache_by_Addr((uint32_t*) ((uint8_t*) frame_buf + crop_start_offset), crop_effective_bytes);
+
             Process_Crop_Image_And_Features(frame_buf, ai_input_features, crop_buffer, current_prep_mode);
+
             SCB_CleanDCache_by_Addr((uint32_t*) ai_input_features, sizeof(ai_input_features));
 
             uint32_t t_pre = HAL_GetTick();

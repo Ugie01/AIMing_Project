@@ -71,6 +71,11 @@ osMessageQueueId_t Queue1Handle;
 const osMessageQueueAttr_t Queue1_attributes = {
   .name = "Queue1"
 };
+/* Definitions for cameraFrameSem */
+osSemaphoreId_t cameraFrameSemHandle;
+const osSemaphoreAttr_t cameraFrameSem_attributes = {
+  .name = "cameraFrameSem"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -107,6 +112,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
+
+  /* Create the semaphores(s) */
+  /* creation of cameraFrameSem */
+  cameraFrameSemHandle = osSemaphoreNew(1, 1, &cameraFrameSem_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */

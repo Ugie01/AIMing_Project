@@ -84,9 +84,9 @@
 #define EI_CLASSIFIER_DATATYPE_UINT8             3
 #define EI_CLASSIFIER_DATATYPE_INT8              9
 
-#define EI_CLASSIFIER_PROJECT_ID                 1071577
-#define EI_CLASSIFIER_PROJECT_OWNER              "robot3bhc"
-#define EI_CLASSIFIER_PROJECT_NAME               "red detector"
+#define EI_CLASSIFIER_PROJECT_ID                 1074099
+#define EI_CLASSIFIER_PROJECT_OWNER              "2026.cosmos.ai"
+#define EI_CLASSIFIER_PROJECT_NAME               "detect_drone_ver2_EXP_RGB"
 #define EI_CLASSIFIER_PROJECT_DEPLOY_VERSION     1
 #define EI_CLASSIFIER_NN_INPUT_FRAME_SIZE        27648
 #define EI_CLASSIFIER_RAW_SAMPLE_COUNT           9216
