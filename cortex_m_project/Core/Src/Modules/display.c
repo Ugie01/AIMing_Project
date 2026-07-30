@@ -517,7 +517,7 @@ HAL_StatusTypeDef Display_UpdateImage(const uint16_t *image, uint16_t width, uin
 #endif
 
         for (dst_x = 0U; dst_x < DISPLAY_WIDTH; dst_x++) {
-            src_x = ((uint32_t) dst_x * width) / DISPLAY_WIDTH;
+            src_x = (uint32_t) (width - 1U) - (((uint32_t) dst_x * width) / DISPLAY_WIDTH);
 #if (DISPLAY_CAMERA_FLIP_180 == 1)
             src_x = (uint32_t) (width - 1U) - src_x;
 #endif
