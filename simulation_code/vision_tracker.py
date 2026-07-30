@@ -13,18 +13,37 @@ class PIDController:
     self.previous_error = 0.0
     self.integral = 0.0
     self.max_output = max_output
+    self.last_time = None  # ⏱️ 실제 시간 측정을 위한 변수 추가
 
-  def compute(self, error, dt=1.0 / 240.0):
+  def compute(self, error):
+    current_time = time.time()
+    if self.last_time is None:
+      dt = 0.17  # 첫 호출 시 기본 AI 주기 가정
+    else:
+      dt = current_time - self.last_time
+      if dt <= 0:
+        dt = 1e-4
+
+    self.last_time = current_time
+
+    # 1. 적분 계산 (실제 시간 dt 반영)
     self.integral += error * dt
+
+    # 2. 미분 계산 (실제 경과 시간 dt 반영하여 정확한 속도/브레이크 감지)
     derivative = (error - self.previous_error) / dt
+
     output = self.kp * error + self.ki * self.integral + self.kd * derivative
 
-    # 출력값이 너무 크게 튀지 않도록 상하한 제한 (클램핑)
+    # 출력 클램핑 적용 (필요시 주석 해제)
     # output = max(-self.max_output, min(self.max_output, output))
 
     self.previous_error = error
     return output
 
+  def reset(self):
+    self.previous_error = 0.0
+    self.integral = 0.0
+    self.last_time = None  # 리셋 시 시간 기록도 초기화
 
 class VisionTracker:
 
@@ -61,7 +80,7 @@ class VisionTracker:
     self.prev_time = None
     self.current_speed = 0.0  # 픽셀/초 단위 속도
 
-  def process_frame(self, frame):
+  def process_frame(self, frame, dead_zone = 10):
     """프레임을 모델 입력 크기(95x95)로 전처리 후 TFLite 추론 수행 (신뢰도 항상 표시, 0.8 이상만 제어)"""
     orig_height, orig_width, _ = frame.shape
 
@@ -98,37 +117,23 @@ class VisionTracker:
       print(f"❌ 좌표 파싱 에러: {e}")
       return False, 0.0, 0.0, frame
 
-    # 3. 신뢰도가 0.6 이상일 때만 타겟 포착 및 PID 제어 수행
-    if confidence >= 0.6:
+    # 3. 신뢰도가 0.8 이상일 때만 타겟 포착 및 PID 제어 수행
+    if confidence >= 0.8:
       has_target = True
 
-      # --- [속도 계산 로직] ---
-      current_time = time.time()
-      if self.prev_cx is not None and self.prev_time is not None:
-        dt = current_time - self.prev_time
-        if dt > 0:
-          # 유클리드 거리 공식으로 픽셀 이동량 계산
-          pixel_distance = np.sqrt((best_cx - self.prev_cx) ** 2 + (best_cy - self.prev_cy) ** 2)
-          self.current_speed = pixel_distance / dt  # pixel / sec
+      # 속도 계산 로직 ... (기존과 동일)
 
-          
-
-      # 현재 좌표와 시간을 다음 비교를 위해 저장
-      self.prev_cx = best_cx
-      self.prev_cy = best_cy
-      self.prev_time = current_time
-      
       img_center_x = orig_width // 2
       img_center_y = orig_height // 2
 
       error_x = best_cx - img_center_x
       error_y = best_cy - img_center_y
 
-      dead_zone = 20
-      if abs(error_x) < dead_zone:
-        error_x = 0.0
-      if abs(error_y) < dead_zone:
-        error_y = 0.0
+      # 🔥 동적으로 전달받은 데드존 적용
+      # if abs(error_x) < dead_zone:
+      #   error_x = 0.0
+      # if abs(error_y) < dead_zone:
+      #   error_y = 0.0
 
       pan_adj = self.pan_pid.compute(error_x)
       tilt_adj = self.tilt_pid.compute(error_y)

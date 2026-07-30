@@ -17,53 +17,27 @@ def main():
     p.loadURDF("plane.urdf")
 
     
-    #============================================================
-    # 초록색 타겟을 초기 랜덤 위치에 생성하고 ID를 반환받음
-    # 초록색 네모
-    # initial_target_pos = [0.2, 0.6, 0.1]
-    # target_visual = p.createVisualShape(
-    #     p.GEOM_BOX, halfExtents=[0.03, 0.03, 0.03], rgbaColor=[0, 1, 0, 1]
-    # )
-    # targetId = p.createMultiBody(
-    #     baseMass=0.0,
-    #     baseVisualShapeIndex=target_visual,
-    #     basePosition=initial_target_pos,
-    #     baseOrientation=[0, 0, 0, 1],
-    # )
+   ## 원 운동을 위한 초기 각도를 완전한 랜덤(0 ~ 2π)으로 지정
+    theta = random.uniform(0, 2 * np.pi)
 
-    # 드론 형태
-    # 초록색 타겟 크기를 실제 드론이나 사람 크기로 수정
-    # 예시: 가로 20cm, 세로 20cm, 높이 10cm 크기의 드론 형태일 경우
-    # initial_target_pos = [0.2, 0.6, 0.1]
-    # target_visual = p.createVisualShape(
-    #     p.GEOM_BOX, 
-    #     halfExtents=[0.1, 0.1, 0.05],  # 👈 이 부분을 원하는 크기의 절반 값으로 수정
-    #     rgbaColor=[0, 1, 0, 1]
-    # )
-    # targetId = p.createMultiBody(
-    #     baseMass=0.0,
-    #     baseVisualShapeIndex=target_visual,
-    #     basePosition=initial_target_pos,
-    #     baseOrientation=[0, 0, 0, 1],
-    # )
+    # 타겟 생성 (구 형태)
+    target_radius = 0.25
+    target_collision = p.createCollisionShape(p.GEOM_SPHERE, radius=target_radius)
+    target_visual = p.createVisualShape(p.GEOM_SPHERE, radius=target_radius, rgbaColor=[1, 0, 0, 1])
 
-   # 큐브 형태
-    #예시: 가로 50cm, 세로 25cm, 높이 170cm 크기의 사람 형태일 경우
-    initial_target_pos = [0.2, 0.6, 0.1]
-    half_extents = [0.25, 0.25, 0.25]
+    # 짐벌(0,0) 중심의 정확한 원주상 초기 위치 계산
+    initial_target_x = 5 * np.cos(theta)
+    initial_target_y = 5 * np.sin(theta)
+    initial_target_pos = [initial_target_x, initial_target_y, 0.5]
 
-    # 1. 충돌체와 시각체를 모두 생성
-    target_collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
-    target_visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=[1, 0, 0, 1])
-
-    # 2. 두 개를 모두 포함하여 멀티바디 생성
     targetId = p.createMultiBody(
         baseMass=0.0,
-        baseCollisionShapeIndex=target_collision,  # 👈 충돌체 추가!
+        baseCollisionShapeIndex=target_collision,
         baseVisualShapeIndex=target_visual,
         basePosition=initial_target_pos,
         baseOrientation=[0, 0, 0, 1],
     )
+   
     # 타겟 물체 크기를 빨간 네모 크기([0.005, 0.01, 0.01])와 똑같이 설정
     # initial_target_pos = [0.2, 0.6, 0.1]
     # target_visual = p.createVisualShape(
@@ -89,6 +63,14 @@ def main():
     gimbal = GimbalSystem()
     tracker = VisionTracker(kp=0.0003, ki=0.0, kd=0.0000)
 
+    # ==========================================
+    # 🎯 [추가] 데드존 실험을 위한 기준 변수 설정
+    # ==========================================
+    current_deadzone = 3  # 기본값 10px (나중에 2~20px 스윕 실험 시 이 값을 바꿉니다)
+
+    # 락온 성공 지속 시간 카운터 (예: 데드존 안에 0.5초 이상 안정적으로 머물면 성공 처리용)
+    lock_stable_count = 0
+
     cam_window_name = "Smart Turret Simulation"
     debug_window_name = "PID Control & Debug"
     cv2.namedWindow(cam_window_name)
@@ -101,7 +83,7 @@ def main():
 
     auto_tracking = False
     step_size_gimbal = 0.05
-    step_size_target = 0.06  # 0.12 =  시속 21km 설정
+    step_size_target = 0.12  # 0.12 =  시속 21km 설정
     current_target_pos = list(initial_target_pos)
     last_keys = {}
 
@@ -111,7 +93,7 @@ def main():
 
     # --- [STM32 20ms 제어 주기 및 SG90 물리 속도 한계 설정] ---
     CONTROL_PERIOD = 0.02  # 20ms (50Hz) 인터럽트 주기
-    AI_INFERENCE_PERIOD = 0.14
+    AI_INFERENCE_PERIOD = 0.17
 
     last_control_time = time.time()
     last_ai_time = time.time()
@@ -153,7 +135,7 @@ def main():
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
 
                 # 비전 추적 및 오차 연산 (TFLite 추론 포함)
-                has_target, pan_adj, tilt_adj, processed_frame = tracker.process_frame(frame)
+                has_target, pan_adj, tilt_adj, processed_frame = tracker.process_frame(frame, dead_zone = current_deadzone)
                 error_x = getattr(tracker, 'last_error_x', 0.0)
                 error_y = getattr(tracker, 'last_error_y', 0.0)
 
@@ -241,6 +223,31 @@ def main():
                 hit_target, laser_line_id = gimbal.update_laser_beam(targetId, laser_line_id)
                 
                 # ==============================================================
+
+                # =========================================================================
+                # 🎯 [추가] Early Stopping / 락온 판정 로직 검증 뼈대
+                # =========================================================================
+                # # 조건: 타겟이 화면에 있고 AND 레이저가 타겟에 맞았으며 AND 오차가 데드존 이내일 때
+                # if has_target and hit_target:
+                #     # 오차가 데드존 내로 들어왔는지 확인 (화면 중앙 기준 픽셀 오차가 데드존 이내)
+                #     # * 편의상 hit_target이 True면 정밀 조준된 것으로 간주할 수도 있습니다.
+                #     lock_stable_count += 1
+                # else:
+                #     lock_stable_count = 0
+
+                if (
+                        has_target
+                        and abs(error_x) <= current_deadzone
+                        and abs(error_y) <= current_deadzone
+                        and hit_target
+                    ):
+                    lock_stable_count += 1
+                else:
+                    lock_stable_count = 0
+
+                # 만약 안정적으로 0.5초(25스텝 @ 50Hz) 동안 락온을 유지했다면? -> 성공 판정 예시
+                is_locked_on = (lock_stable_count >= 25)
+
                 # UI 디스플레이 갱신
                 if processed_frame is not None:
                     display_frame = processed_frame.copy()
@@ -251,14 +258,30 @@ def main():
                         cv2.putText(display_frame, mode_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                     cv2.imshow(cam_window_name, display_frame)
 
-                debug_board = np.zeros((280, 450, 3), dtype=np.uint8)
+                # 💡 디버그 창 크기를 텍스트가 잘 보이도록 살짝 넓혀줍니다 (기존 280 -> 320)
+                debug_board = np.zeros((320, 480, 3), dtype=np.uint8)
+                
+                # 🎯 락온 상태를 직관적으로 판단할 수 있는 문자열 생성
+                if is_locked_on:
+                    lock_status_str = "🔥 [LOCKED ON & STABLE!]"
+                    lock_color = (0, 255, 0)  # 형광 초록색 (성공)
+                elif hit_target:
+                    lock_status_str = "⚡ [HIT (Adjusting...)]"
+                    lock_color = (0, 255, 255) # 노란색 (명중 중이지만 안정화 대기 중)
+                else:
+                    lock_status_str = "❌ [SEARCHING...]"
+                    lock_color = (0, 0, 255)  # 빨간색 (미착지/탐색 중)
+
                 texts = [
                     f"[STM32 + SG90 + 140ms AI Cycle]",
+                    f"  Deadzone: {current_deadzone} px",
                     f"  KP: {current_kp:.5f} | KI: {current_ki:.5f} | KD: {current_kd:.5f}",
                     f"[System Status]",
                     f"  Mode   : {'AUTO TRACKING' if auto_tracking else 'MANUAL'} (Target: {has_target})",
                     f"  Laser  : {'🔥 TARGET HIT!' if hit_target else '--- (Scanning)'}",
                     f"  Conf   : {current_conf:.2f}",
+                    # 🚀 여기에 락온 상태를 강조해서 배치합니다!
+                    f"  LOCK   : {lock_status_str}",
                     f"[Target Motion & Error]",
                     f"  Speed  : {current_speed:.1f} px/s",
                     f"  Error X: {error_x:.2f} px | Error Y: {error_y:.2f} px",
@@ -268,9 +291,18 @@ def main():
 
                 y_offset = 25
                 for t in texts:
-                    color = (0, 255, 0) if "AUTO" in t or t.startswith("[") else (255, 255, 255)
-                    cv2.putText(debug_board, t, (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-                    y_offset += 22
+                    # 락온 줄인 경우 위에서 정의한 강렬한 색상(lock_color)을 적용
+                    if "LOCK   :" in t:
+                        color = lock_color
+                        scale = 0.55  # 글씨 크기도 살짝 키움
+                        thickness = 2
+                    else:
+                        color = (0, 255, 0) if "AUTO" in t or t.startswith("[") else (255, 255, 255)
+                        scale = 0.45
+                        thickness = 1
+
+                    cv2.putText(debug_board, t, (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness)
+                    y_offset += 24 # 줄 간격도 살짝 넓힘
 
                 cv2.imshow(debug_window_name, debug_board)
 

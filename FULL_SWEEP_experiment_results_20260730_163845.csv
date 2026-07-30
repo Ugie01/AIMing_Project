@@ -1,0 +1,4 @@
+trial_id,deadzone_px,target_size,target_speed,target_distance,success,time_to_lock,hit_ratio
+1,2,0.2,3,4,0,10.0,0.0,27.200000000000003
+2,4,0.2,3,4,0,10.0,0.0,26.8
+3,2,0.4,3,4,1,1.7,100.0,23.52941176470588
