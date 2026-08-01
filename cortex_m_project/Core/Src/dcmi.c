@@ -40,7 +40,7 @@ void MX_DCMI_Init(void)
   /* USER CODE END DCMI_Init 1 */
   hdcmi.Instance = DCMI;
   hdcmi.Init.SynchroMode = DCMI_SYNCHRO_HARDWARE;
-  hdcmi.Init.PCKPolarity = DCMI_PCKPOLARITY_FALLING;
+  hdcmi.Init.PCKPolarity = DCMI_PCKPOLARITY_RISING;
   hdcmi.Init.VSPolarity = DCMI_VSPOLARITY_LOW;
   hdcmi.Init.HSPolarity = DCMI_HSPOLARITY_LOW;
   hdcmi.Init.CaptureRate = DCMI_CR_ALL_FRAME;
@@ -73,7 +73,6 @@ void HAL_DCMI_MspInit(DCMI_HandleTypeDef* dcmiHandle)
     __HAL_RCC_DCMI_CLK_ENABLE();
 
     __HAL_RCC_GPIOI_CLK_ENABLE();
-    __HAL_RCC_GPIOE_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOH_CLK_ENABLE();
@@ -82,46 +81,39 @@ void HAL_DCMI_MspInit(DCMI_HandleTypeDef* dcmiHandle)
     PI5     ------> DCMI_VSYNC
     PI4     ------> DCMI_D5
     PI7     ------> DCMI_D7
-    PE4     ------> DCMI_D4
+    PC11     ------> DCMI_D4
     PC8     ------> DCMI_D2
-    PC9     ------> DCMI_D3
     PC7     ------> DCMI_D1
     PC6     ------> DCMI_D0
     PA6     ------> DCMI_PIXCLK
+    PH12     ------> DCMI_D3
     PH8     ------> DCMI_HSYNC
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_5|GPIO_PIN_4|GPIO_PIN_7;
+    GPIO_InitStruct.Pin = CAM_D6_Pin|CAM_VSYNC_Pin|CAM_D5_Pin|CAM_D7_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
     HAL_GPIO_Init(GPIOI, &GPIO_InitStruct);
 
-    GPIO_InitStruct.Pin = GPIO_PIN_4;
+    GPIO_InitStruct.Pin = CAM_D4_Pin|CAM_D2_Pin|CAM_D1_Pin|CAM_D0_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
-    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_7|GPIO_PIN_6;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-    GPIO_InitStruct.Pin = GPIO_PIN_6;
+    GPIO_InitStruct.Pin = CAM_PIXCLK_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    HAL_GPIO_Init(CAM_PIXCLK_GPIO_Port, &GPIO_InitStruct);
 
-    GPIO_InitStruct.Pin = GPIO_PIN_8;
+    GPIO_InitStruct.Pin = CAM_D3_Pin|CAM_HSYNC_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
     HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
 
@@ -135,8 +127,11 @@ void HAL_DCMI_MspInit(DCMI_HandleTypeDef* dcmiHandle)
     hdma_dcmi.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
     hdma_dcmi.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
     hdma_dcmi.Init.Mode = DMA_CIRCULAR;
-    hdma_dcmi.Init.Priority = DMA_PRIORITY_LOW;
-    hdma_dcmi.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    hdma_dcmi.Init.Priority = DMA_PRIORITY_VERY_HIGH;
+    hdma_dcmi.Init.FIFOMode = DMA_FIFOMODE_ENABLE;
+    hdma_dcmi.Init.FIFOThreshold = DMA_FIFO_THRESHOLD_HALFFULL;
+    hdma_dcmi.Init.MemBurst = DMA_MBURST_SINGLE;
+    hdma_dcmi.Init.PeriphBurst = DMA_PBURST_SINGLE;
     if (HAL_DMA_Init(&hdma_dcmi) != HAL_OK)
     {
       Error_Handler();
@@ -144,6 +139,9 @@ void HAL_DCMI_MspInit(DCMI_HandleTypeDef* dcmiHandle)
 
     __HAL_LINKDMA(dcmiHandle,DMA_Handle,hdma_dcmi);
 
+    /* DCMI interrupt Init */
+    HAL_NVIC_SetPriority(DCMI_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(DCMI_IRQn);
   /* USER CODE BEGIN DCMI_MspInit 1 */
 
   /* USER CODE END DCMI_MspInit 1 */
@@ -166,26 +164,27 @@ void HAL_DCMI_MspDeInit(DCMI_HandleTypeDef* dcmiHandle)
     PI5     ------> DCMI_VSYNC
     PI4     ------> DCMI_D5
     PI7     ------> DCMI_D7
-    PE4     ------> DCMI_D4
+    PC11     ------> DCMI_D4
     PC8     ------> DCMI_D2
-    PC9     ------> DCMI_D3
     PC7     ------> DCMI_D1
     PC6     ------> DCMI_D0
     PA6     ------> DCMI_PIXCLK
+    PH12     ------> DCMI_D3
     PH8     ------> DCMI_HSYNC
     */
-    HAL_GPIO_DeInit(GPIOI, GPIO_PIN_6|GPIO_PIN_5|GPIO_PIN_4|GPIO_PIN_7);
+    HAL_GPIO_DeInit(GPIOI, CAM_D6_Pin|CAM_VSYNC_Pin|CAM_D5_Pin|CAM_D7_Pin);
 
-    HAL_GPIO_DeInit(GPIOE, GPIO_PIN_4);
+    HAL_GPIO_DeInit(GPIOC, CAM_D4_Pin|CAM_D2_Pin|CAM_D1_Pin|CAM_D0_Pin);
 
-    HAL_GPIO_DeInit(GPIOC, GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_7|GPIO_PIN_6);
+    HAL_GPIO_DeInit(CAM_PIXCLK_GPIO_Port, CAM_PIXCLK_Pin);
 
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_6);
-
-    HAL_GPIO_DeInit(GPIOH, GPIO_PIN_8);
+    HAL_GPIO_DeInit(GPIOH, CAM_D3_Pin|CAM_HSYNC_Pin);
 
     /* DCMI DMA DeInit */
     HAL_DMA_DeInit(dcmiHandle->DMA_Handle);
+
+    /* DCMI interrupt Deinit */
+    HAL_NVIC_DisableIRQ(DCMI_IRQn);
   /* USER CODE BEGIN DCMI_MspDeInit 1 */
 
   /* USER CODE END DCMI_MspDeInit 1 */
