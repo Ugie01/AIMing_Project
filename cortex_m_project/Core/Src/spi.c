@@ -99,7 +99,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     PB13     ------> SPI2_SCK
     PB14     ------> SPI2_MISO
     */
-    GPIO_InitStruct.Pin = LCD_MOSI_Pin|LCD_SCK_Pin|LCD_MISO_Pin;
+    GPIO_InitStruct.Pin = TFT_MOSI_Pin|TFT_SCK_Pin|TFT_MISO_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -150,7 +150,7 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
     PB13     ------> SPI2_SCK
     PB14     ------> SPI2_MISO
     */
-    HAL_GPIO_DeInit(GPIOB, LCD_MOSI_Pin|LCD_SCK_Pin|LCD_MISO_Pin);
+    HAL_GPIO_DeInit(GPIOB, TFT_MOSI_Pin|TFT_SCK_Pin|TFT_MISO_Pin);
 
     /* SPI2 DMA DeInit */
     HAL_DMA_DeInit(spiHandle->hdmatx);

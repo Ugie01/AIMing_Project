@@ -107,6 +107,64 @@ static inline void Preprocess_HSV_Red(uint8_t r, uint8_t g, uint8_t b, uint16_t 
 }
 
 // ==============================================================================
+// 160x120 -> 96x96 이미지 리사이징(압축) & 전처리 함수
+// ==============================================================================
+static void Process_Resize_Image_And_Features(const uint16_t *src_image, float *out_features, uint16_t *dst_resized, PreprocessMode_t mode) {
+    for (int y = 0; y < CROP_H; y++) {
+        // Y 좌표 매핑 (정수 연산으로 비율 계산)
+        const uint32_t src_y = (y * FRAME_H) / CROP_H;
+        const uint32_t src_row_offset = src_y * FRAME_W;
+        const int target_row_offset = y * CROP_W;
+
+        for (int x = 0; x < CROP_W; x++) {
+            // 좌표 매핑 (정수 연산으로 비율 계산)
+            const uint32_t src_x = (x * FRAME_W) / CROP_W;
+
+            // 원본 이미지에서 리사이징된 좌표의 픽셀 추출
+            uint16_t pixel = src_image[src_row_offset + src_x];
+
+            // RGB565 -> RGB888 비트 확장 변환
+            uint32_t r_5 = (pixel >> 11) & 0x1F;
+            uint32_t g_6 = (pixel >> 5) & 0x3F;
+            uint32_t b_5 = pixel & 0x1F;
+
+            uint8_t r_8 = (r_5 << 3) | (r_5 >> 2);
+            uint8_t g_8 = (g_6 << 2) | (g_6 >> 4);
+            uint8_t b_8 = (b_5 << 3) | (b_5 >> 2);
+
+            uint8_t final_r, final_g, final_b;
+            uint16_t out_pixel;
+
+            // 선택된 모드별 서브 함수 호출
+            switch (mode) {
+            case PREPROCESS_NONE:
+                Preprocess_None(r_8, g_8, b_8, pixel, &final_r, &final_g, &final_b, &out_pixel);
+                break;
+
+            case PREPROCESS_SIMPLE:
+                Preprocess_SimpleRGB(r_8, g_8, b_8, pixel, &final_r, &final_g, &final_b, &out_pixel);
+                break;
+
+            case PREPROCESS_HSV:
+                Preprocess_HSV_Red(r_8, g_8, b_8, pixel, &final_r, &final_g, &final_b, &out_pixel);
+                break;
+
+            default:
+                Preprocess_None(r_8, g_8, b_8, pixel, &final_r, &final_g, &final_b, &out_pixel);
+                break;
+            }
+
+            // 결과 버퍼 기록
+            int target_idx = target_row_offset + x;
+            dst_resized[target_idx] = out_pixel;
+
+            // AI 입력용 RGB888 패킹 (0x00RRGGBB)
+            uint32_t hex_val = ((uint32_t) final_r << 16) | ((uint32_t) final_g << 8) | final_b;
+            out_features[target_idx] = (float) hex_val;
+        }
+    }
+}
+// ==============================================================================
 // 96x96 이미지 크롭 & 전처리 함수
 // ==============================================================================
 static void Process_Crop_Image_And_Features(const uint16_t *src_image, float *out_features, uint16_t *dst_crop, PreprocessMode_t mode) {
@@ -151,7 +209,7 @@ static void Process_Crop_Image_And_Features(const uint16_t *src_image, float *ou
                 break;
             }
 
-            // 3. 결과 버퍼 기록
+            // 결과 버퍼 기록
             int target_idx = target_row_offset + x;
             dst_crop[target_idx] = crop_pixel;
 
@@ -178,12 +236,14 @@ static void Draw_5x5_BlueDot(uint16_t *crop_buf, int center_x, int center_y) {
 extern "C" void VisionTask(void) {
     UART_Printf(" VisionTask Running inference...\r\n");
 
+    // 카메라 리셋 및 전원 제어
     HAL_GPIO_WritePin(CAM_PWDN_GPIO_Port, CAM_PWDN_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_RESET);
     osDelay(30);
     HAL_GPIO_WritePin(CAM_RET_GPIO_Port, CAM_RET_Pin, GPIO_PIN_SET);
     osDelay(20);
 
+    // 카메라 PID 확인
     uint16_t pid = ov2640_ReadID(OV2640_I2C_ADDR);
     if (pid != OV2640_ID) {
         UART_Printf("OV2640 Check Failed! Read ID = 0x%02X\r\n", pid);
@@ -191,11 +251,13 @@ extern "C" void VisionTask(void) {
     }
     UART_Printf("OV2640 Connected! ID = 0x%02X\r\n", pid);
 
+    // 카메라 초기화 및 모드 설정
     ov2640_Init(OV2640_I2C_ADDR, CAMERA_R160x120);
     Camera_SetMode(Camera_GetMode());
     Camera_StartCapture();
     UART_Printf("Start Capture...\r\n");
 
+    // 디스플레이 초기화
     if (Display_Init() != HAL_OK) {
         Error_Handler();
     }
@@ -212,6 +274,7 @@ extern "C" void VisionTask(void) {
     static uint32_t sum_total = 0;
 
     for (;;) {
+        // 이미지가 담겼을때 실행
         if (osSemaphoreAcquire(cameraFrameSemHandle, 1000U) == osOK) {
             uint32_t current_fps_tick = HAL_GetTick();
             current_fps = 1000.0f / (float) (current_fps_tick - last_fps_tick);
@@ -231,7 +294,10 @@ extern "C" void VisionTask(void) {
 
             SCB_InvalidateDCache_by_Addr((uint32_t*) ((uint8_t*) frame_buf + crop_start_offset), crop_effective_bytes);
 
-            Process_Crop_Image_And_Features(frame_buf, ai_input_features, crop_buffer, current_prep_mode);
+            // 각각 이미지를 크롭했을 때 or 압축했을 때
+            Process_Crop_Image_And_Features(frame_buf, ai_input_features, crop_buffer, current_prep_mode);  // 이미지 크롭
+//            Process_Resize_Image_And_Features(frame_buf, ai_input_features, crop_buffer, current_prep_mode);  // 이미지 압축
+
 
             SCB_CleanDCache_by_Addr((uint32_t*) ai_input_features, sizeof(ai_input_features));
 
@@ -269,7 +335,7 @@ extern "C" void VisionTask(void) {
                     int center_y = best_bb.y + (best_bb.height / 2);
 
                     // 노이즈 필터링 (지수 이동 평균 EMA: 반응이 빠르고 튀는 튀김 방지)
-                    // alpha 값이 클수록 최신 값 반영(빠름), 작을수록 부드러움 (0.6 추천)
+                    // alpha 값이 클수록 최신 값 반영(빠름), 작을수록 부드러움
                     float alpha = 0.6f;
                     if (target_miss_count > 0xFF) { // 초기화 상태 예외 방지용 등
                         last_valid_x = (float) center_x;
@@ -284,7 +350,8 @@ extern "C" void VisionTask(void) {
                     target_msg.y = last_valid_y;
                     target_msg.detected = 1.0f;
 
-                    target_miss_count = 0; // 타겟 발견했으므로 미스 카운트 리셋
+                    // 타겟 발견했으므로 미스 카운트 리셋
+                    target_miss_count = 0;
                 }
             }
 
