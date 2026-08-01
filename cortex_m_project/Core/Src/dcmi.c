@@ -89,28 +89,28 @@ void HAL_DCMI_MspInit(DCMI_HandleTypeDef* dcmiHandle)
     PH12     ------> DCMI_D3
     PH8     ------> DCMI_HSYNC
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_5|GPIO_PIN_4|GPIO_PIN_7;
+    GPIO_InitStruct.Pin = CAM_D6_Pin|CAM_VSYNC_Pin|CAM_D5_Pin|CAM_D7_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
     HAL_GPIO_Init(GPIOI, &GPIO_InitStruct);
 
-    GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_8|GPIO_PIN_7|GPIO_PIN_6;
+    GPIO_InitStruct.Pin = CAM_D4_Pin|CAM_D2_Pin|CAM_D1_Pin|CAM_D0_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-    GPIO_InitStruct.Pin = GPIO_PIN_6;
+    GPIO_InitStruct.Pin = CAM_PIXCLK_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF13_DCMI;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    HAL_GPIO_Init(CAM_PIXCLK_GPIO_Port, &GPIO_InitStruct);
 
-    GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_8;
+    GPIO_InitStruct.Pin = CAM_D3_Pin|CAM_HSYNC_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -172,13 +172,13 @@ void HAL_DCMI_MspDeInit(DCMI_HandleTypeDef* dcmiHandle)
     PH12     ------> DCMI_D3
     PH8     ------> DCMI_HSYNC
     */
-    HAL_GPIO_DeInit(GPIOI, GPIO_PIN_6|GPIO_PIN_5|GPIO_PIN_4|GPIO_PIN_7);
+    HAL_GPIO_DeInit(GPIOI, CAM_D6_Pin|CAM_VSYNC_Pin|CAM_D5_Pin|CAM_D7_Pin);
 
-    HAL_GPIO_DeInit(GPIOC, GPIO_PIN_11|GPIO_PIN_8|GPIO_PIN_7|GPIO_PIN_6);
+    HAL_GPIO_DeInit(GPIOC, CAM_D4_Pin|CAM_D2_Pin|CAM_D1_Pin|CAM_D0_Pin);
 
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_6);
+    HAL_GPIO_DeInit(CAM_PIXCLK_GPIO_Port, CAM_PIXCLK_Pin);
 
-    HAL_GPIO_DeInit(GPIOH, GPIO_PIN_12|GPIO_PIN_8);
+    HAL_GPIO_DeInit(GPIOH, CAM_D3_Pin|CAM_HSYNC_Pin);
 
     /* DCMI DMA DeInit */
     HAL_DMA_DeInit(dcmiHandle->DMA_Handle);

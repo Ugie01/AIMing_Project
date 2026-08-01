@@ -1,5 +1,4 @@
 #include "motor.h"
-#include <math.h>
 
 // ==============================================================================
 // 모듈 정적 상태 변수 모음
@@ -39,6 +38,71 @@ void Motor_ManualGetPosition(float *pan_ccr, float *tilt_ccr) {
         *pan_ccr = manual_pan;
     if (tilt_ccr != NULL)
         *tilt_ccr = manual_tilt;
+}
+
+void Motor_ManualProcess2(const JoystickInput_t *joy, TIM_HandleTypeDef *htim, uint32_t dt_ms) {
+    if ((joy == NULL) || (htim == NULL) || (dt_ms == 0U))
+        return;
+
+    // 조이스틱 비율 계산 (-1.0f ~ 1.0f)
+    float ratio_x = (float) joy->x / (float) JOYSTICK_AXIS_MAX; //[cite: 3, 4]
+    float ratio_y = (float) joy->y / (float) JOYSTICK_AXIS_MAX; //[cite: 3, 4]
+
+    // 데드존 처리
+    if (fabsf(ratio_x) < 0.15f)
+        ratio_x = 0.0f; //[cite: 3]
+    if (fabsf(ratio_y) < 0.15f)
+        ratio_y = 0.0f; //[cite: 3]
+
+    // 1프레임당 이동 step 계산
+    float step = MANUAL_SPEED_PER_SEC * ((float) dt_ms / 1000.0f); //[cite: 3]
+
+    // 조이스틱 입력이 있을 경우에만 로직 수행 및 출력
+    if (ratio_x != 0.0f || ratio_y != 0.0f) {
+
+        // 1. Pan (좌우) 처리
+        if (ratio_x > 0.0f) {
+            manual_pan -= (ratio_x * step); // 좌측 이동[cite: 3]
+            UART_Printf("[LEFT] ");
+        } else if (ratio_x < 0.0f) {
+            manual_pan -= (ratio_x * step); // 우측 이동[cite: 3]
+            UART_Printf("[RIGHT] ");
+        }
+
+        // 2. Tilt (상하) 처리
+        if (ratio_y > 0.0f) {
+            manual_tilt += (ratio_y * step); // 상(위) 이동[cite: 3]
+            UART_Printf("[UP] ");
+        } else if (ratio_y < 0.0f) {
+            manual_tilt += (ratio_y * step); // 하(아래) 이동[cite: 3]
+            UART_Printf("[DOWN] ");
+        }
+
+        // 3. 한계 각도 클램핑 (Clamp)
+        manual_pan = Motor_ClampAngle(manual_pan); //[cite: 3]
+        manual_tilt = Motor_ClampAngle(manual_tilt); //[cite: 3]
+
+        // 4. 최소/최대 도달 여부 확인 및 프린트
+        UART_Printf("Pan: %.1f ", manual_pan);
+        if (manual_pan <= (float) ANGLE_MIN) {
+            UART_Printf("(PAN MIN! ) "); //[cite: 5]
+        } else if (manual_pan >= (float) ANGLE_MAX) {
+            UART_Printf("(PAN MAX! ) "); //[cite: 5]
+        }
+
+        UART_Printf("| Tilt: %.1f ", manual_tilt);
+        if (manual_tilt <= (float) ANGLE_MIN) {
+            UART_Printf("(TILT MIN! )"); //[cite: 5]
+        } else if (manual_tilt >= (float) ANGLE_MAX) {
+            UART_Printf("(TILT MAX! )"); //[cite: 5]
+        }
+
+        UART_Printf("\r\n");
+    }
+
+    // PWM CCR 적용
+    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_1, (uint32_t ) manual_pan); //[cite: 3]
+    __HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_2, (uint32_t ) manual_tilt); //[cite: 3]
 }
 
 // 조이스틱 입력값을 기반으로 수동 모터 위치 계산 및 타이머 PWM 반영

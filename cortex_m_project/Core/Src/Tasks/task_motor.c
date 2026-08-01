@@ -28,11 +28,11 @@ uint8_t Motor_GetTrackState(void) {
 }
 
 void Raser_ON() {
-    HAL_GPIO_WritePin(RASER_GPIO_Port, RASER_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(LASER_GPIO_Port, LASER_Pin, GPIO_PIN_SET);
 }
 
 void Raser_OFF() {
-    HAL_GPIO_WritePin(RASER_GPIO_Port, RASER_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LASER_GPIO_Port, LASER_Pin, GPIO_PIN_RESET);
 }
 
 void MotorTask(void) {
@@ -95,7 +95,7 @@ void MotorTask(void) {
                 lockon_counter = 0;
                 Raser_OFF();
 
-                // 🔥 수동 모드 종료 시 조이스틱 DMA 정지
+                // 수동 모드 종료 시 조이스틱 DMA 정지
                 Joystick_Stop_DMA();
 
                 UART_Printf("MACHINE_STATE_IDLE\r\n");
@@ -104,7 +104,7 @@ void MotorTask(void) {
                 Raser_OFF();
                 UART_Printf("MACHINE_STATE_MANUAL\r\n");
 
-                // 🔥 수동 모드 진입 시 조이스틱 DMA 시작 (약 40ms 소요되지만 1회성이므로 무방)
+                // 수동 모드 진입 시 조이스틱 DMA 시작
                 Joystick_Start_DMA();
 
                 Motor_ManualSetPosition((float) ANGLE_MID, (float) ANGLE_MID);
@@ -114,15 +114,15 @@ void MotorTask(void) {
 
         // [상태별 모터 제어 실행]
         if (track_state == MACHINE_STATE_MANUAL) {
-            Motor_ManualProcess(&joy, &htim2, MOTOR_TASK_PERIOD_MS);
+            Motor_ManualProcess2(&joy, &htim2, MOTOR_TASK_PERIOD_MS);
         } else {
-            //  큐를 기다리지 않고(Timeout 0) 프레임 도착 여부만 즉시 확인
+            //  큐를 기다리지 않고 프레임 도착 여부만 즉시 확인
             osStatus_t status = osMessageQueueGet(Queue1Handle, &rx_msg, NULL, 0);
 
             // 카메라 프레임이 도착했을 때만 (약 140ms 마다 1번씩 실행됨)
             if (status == osOK) {
                 if (rx_msg.detected) {
-                    // 🎯 타겟을 찾은 경우: miss_counter 초기화
+                    // 타겟을 찾은 경우: miss_counter 초기화
                     miss_counter = 0;
 
                     // 상태 2 & 3: 타겟 발견 (TRACKING or LOCKON)
@@ -140,7 +140,7 @@ void MotorTask(void) {
                     }
 
                     if (lockon_counter >= LOCKON_MAINTAIN_COUNT) {
-                        // 상태가 변경되는 '최초 1회'에만 UART로 FIRE 전송
+                        // 상태가 변경되는 최초 1회에만 UART로 FIRE 전송
                         if (track_state != MACHINE_STATE_LOCKON) {
                             UART_Printf("FIRE\r\n");
                         }
@@ -159,16 +159,14 @@ void MotorTask(void) {
                 } else {
                     // ❌ 타겟 미발견 시 로직
                     if (miss_counter < MISS_TOLERANCE_COUNT) {
-                        // 1. 유예 기간 중: 카운터만 증가시키고, 현재 모터 위치를 그대로 유지 (아무것도 안 함)
+                        // 1. 카운터만 증가시키고, 현재 모터 위치를 그대로 유지
                         // 상태는 추적(TRACKING) 상태를 유지하여 UI상에서도 타겟을 찾고 있음을 표시
                         miss_counter++;
                         lockon_counter = 0; // 타겟을 놓쳤으므로 락온은 즉시 풀림
                         Raser_OFF();
 
-                        // (선택) UI에서 잠시 잃어버렸음을 명확히 하려면 상태를 IDLE로 바꿔도 됩니다.
-                        // 여기서는 "가만히 대기"하는 상태를 TRACKING의 연장선으로 보았습니다.
                     } else {
-                        // 2. 유예 기간 초과 (10프레임 이상 미검출): 순찰(IDLE) 모드로 완전 전환
+                        // 2. 10프레임 이상 미검출시 순찰 모드로 전환
                         track_state = MACHINE_STATE_IDLE;
                         lockon_counter = 0;
                         Raser_OFF();
@@ -227,102 +225,78 @@ void MotorTask(void) {
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART1) {
 
-    // ==========================================
-    // 1. Pan 모터 (360도) PID 튜닝 (P, I, D 키)
-    // ==========================================
-    if (rx_data == 'q')
-    pan_pid.kp += 0.15f;
-    else if (rx_data == 'a')
-    pan_pid.kp -= 0.15f;
+// ==========================================
+// 1. Pan 모터 (360도) PID 튜닝 - 소문자
+// ==========================================
+        if (rx_data == 'q')
+            pan_pid.kp += 0.15f;
+        else if (rx_data == 'a')
+            pan_pid.kp -= 0.15f;
 
-    else if (rx_data == 'w')
-    pan_pid.ki += 0.001f;
-    else if (rx_data == 's')
-    pan_pid.ki -= 0.001f;
+        else if (rx_data == 'w')
+            pan_pid.ki += 0.001f;
+        else if (rx_data == 's')
+            pan_pid.ki -= 0.001f;
 
-    else if (rx_data == 'e')
-    pan_pid.kd += 0.1f;
-    else if (rx_data == 'd')
-    pan_pid.kd -= 0.1f;
+        else if (rx_data == 'e')
+            pan_pid.kd += 0.1f;
+        else if (rx_data == 'd')
+            pan_pid.kd -= 0.1f;
 
-    // ==========================================
-    // 2. Tilt 모터 (180도) PID 튜닝 (Q, W, E 키)
-    // ==========================================
-    else if (rx_data == 'Q')
-    tilt_pid.kp += 0.1f;// Tilt는 민감하므로 0.1씩 조절
-    else if (rx_data == 'A')
-    tilt_pid.kp -= 0.1f;
+// ==========================================
+// 2. Tilt 모터 (180도) PID 튜닝 - 대문자
+// ==========================================
+        else if (rx_data == 'Q')
+            tilt_pid.kp += 0.1f;
+        else if (rx_data == 'A')
+            tilt_pid.kp -= 0.1f;
 
-    else if (rx_data == 'W')
-    tilt_pid.ki += 0.001f;
-    else if (rx_data == 'S')
-    tilt_pid.ki -= 0.001f;
+        else if (rx_data == 'W')
+            tilt_pid.ki += 0.001f;
+        else if (rx_data == 'S')
+            tilt_pid.ki -= 0.001f;
 
-    else if (rx_data == 'E')
-    tilt_pid.kd += 0.05f;
-    else if (rx_data == 'D')
-    tilt_pid.kd -= 0.05f;
+        else if (rx_data == 'E')
+            tilt_pid.kd += 0.05f;
+        else if (rx_data == 'D')
+            tilt_pid.kd -= 0.05f;
 
-    // ==========================================
-    // 방어 로직: PID 상수가 음수가 되지 않도록 클램핑
-    // ==========================================
-    if (pan_pid.kp < 0.0f)
-    pan_pid.kp = 0.0f;
-    if (pan_pid.ki < 0.0f)
-    pan_pid.ki = 0.0f;
-    if (pan_pid.kd < 0.0f)
-    pan_pid.kd = 0.0f;
+// ==========================================
+// 3. 수동 ijkl 테스트 조작
+// ==========================================
+        else if (rx_data == 'i') { // 위
+            tilt_val = (tilt_val + STEP_SIZE > ANGLE_MAX) ? ANGLE_MAX : tilt_val + STEP_SIZE;
+            UART_Printf("[UP] Manual Tilt: %d\r\n", tilt_val);
+        } else if (rx_data == 'k') { // 아래
+            tilt_val = (tilt_val < ANGLE_MIN + STEP_SIZE) ? ANGLE_MIN : tilt_val - STEP_SIZE;
+            UART_Printf("[DOWN] Manual Tilt: %d\r\n", tilt_val);
+        } else if (rx_data == 'j') { // 좌
+            pan_val = (pan_val < ANGLE_MIN + STEP_SIZE) ? ANGLE_MIN : pan_val - STEP_SIZE;
+            UART_Printf("[LEFT] Manual Pan: %d\r\n", pan_val);
+        } else if (rx_data == 'l') { // 우
+            pan_val = (pan_val + STEP_SIZE > ANGLE_MAX) ? ANGLE_MAX : pan_val + STEP_SIZE;
+            UART_Printf("[RIGHT] Manual Pan: %d\r\n", pan_val);
+        }
 
-    if (tilt_pid.kp < 0.0f)
-    tilt_pid.kp = 0.0f;
-    if (tilt_pid.ki < 0.0f)
-    tilt_pid.ki = 0.0f;
-    if (tilt_pid.kd < 0.0f)
-    tilt_pid.kd = 0.0f;
 
-    pid_updated_flag = true;
-    // 다음 1바이트 수신을 위해 인터럽트 재활성화
-    HAL_UART_Receive_IT(&huart1, &rx_data, 1);
+// 방어 로직: PID 상수가 음수가 되지 않도록 클램핑
+        if (pan_pid.kp < 0.0f)
+            pan_pid.kp = 0.0f;
+        if (pan_pid.ki < 0.0f)
+            pan_pid.ki = 0.0f;
+        if (pan_pid.kd < 0.0f)
+            pan_pid.kd = 0.0f;
 
-    // 입력받은 문자(rx_data)에 따른 Pan/Tilt 값 조정
-    //            if (rx_data == 'w' || rx_data == 'W') {
-//                tilt_val += STEP_SIZE; // 위쪽 (Tilt 증가)
-//            } else if (rx_data == 's' || rx_data == 'S') {
-//                tilt_val -= STEP_SIZE; // 아래쪽 (Tilt 감소)
-//            } else if (rx_data == 'a' || rx_data == 'A') {
-//                pan_val += STEP_SIZE;  // 오른쪽 (Pan 증가)
-//            } else if (rx_data == 'd' || rx_data == 'D') {
-//
-//                pan_val -= STEP_SIZE;  // 왼쪽 (Pan 감소)
-//            } else if (rx_data == 't' || rx_data == 'T') {
-//                if (tilt_toggle_state == 0) {
-//                    tilt_val = 500;
-//                    tilt_toggle_state = 1;
-//                } else {
-//                    tilt_val = 1250;
-//                    tilt_toggle_state = 0;
-//                }
-//            }
-//
-//            // 서보모터 안전 범위 제한 (500 ~ 2500) 강제 적용
-//            if (pan_val > ANGLE_MAX)
-//                pan_val = ANGLE_MAX;
-//            if (pan_val < ANGLE_MIN)
-//                pan_val = ANGLE_MIN;
-//            if (tilt_val > ANGLE_MAX)
-//                tilt_val = ANGLE_MAX;
-//            if (tilt_val < ANGLE_MIN)
-//                tilt_val = ANGLE_MIN;
-//
-//            // 실제 타이머 CCR 값 갱신 (TIM2 채널 1: Pan, 채널 2: Tilt)
-//            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pan_val);
-//            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, tilt_val);
-//
-//            // 디버깅용 현재 값 출력
-//        UART_Printf("WASD Input [%c] -> Pan: %d, Tilt: %d\r\n", rx_data, pan_val, tilt_val);
-//
-//            // 다음 1바이트 수신을 위해 인터럽트 재활성화
-//            HAL_UART_Receive_IT(&huart1, &rx_data, 1);
-//
+        if (tilt_pid.kp < 0.0f)
+            tilt_pid.kp = 0.0f;
+        if (tilt_pid.ki < 0.0f)
+            tilt_pid.ki = 0.0f;
+        if (tilt_pid.kd < 0.0f)
+            tilt_pid.kd = 0.0f;
+
+
+        pid_updated_flag = true;
+// 다음 1바이트 수신을 위해 인터럽트 재활성화
+        HAL_UART_Receive_IT(&huart1, &rx_data, 1);
     }
 }

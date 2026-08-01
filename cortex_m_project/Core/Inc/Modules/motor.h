@@ -6,7 +6,9 @@ extern "C" {
 #endif
 
 #include "main.h"
+#include <math.h>
 #include "joystick.h"
+#include "app_globals.h"
 
 // ==============================================================================
 // 매크로 및 상수 정의
@@ -81,6 +83,8 @@ typedef struct {
 // [수동 제어 (Manual)] ---------------------------------------------------------
 // 수동 제어 모드에서 조이스틱 입력값에 따라 모터 각도 갱신
 void Motor_ManualProcess(const JoystickInput_t *joy, TIM_HandleTypeDef *htim, uint32_t dt_ms);
+void Motor_ManualProcess2(const JoystickInput_t *joy, TIM_HandleTypeDef *htim, uint32_t dt_ms);
+
 // 수동 제어의 현재 Pan/Tilt CCR 값 강제 설정 (AUTO -> MANUAL 전환 시 충격 방지)
 void Motor_ManualSetPosition(float pan_ccr, float tilt_ccr);
 // 수동 제어의 현재 Pan/Tilt CCR 값 읽기 (MANUAL -> AUTO 전환 시 초기값 제공)
