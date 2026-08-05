@@ -44,23 +44,40 @@ STM32 적용
 # 2. Folder Structure
 
 FOMO_Local
+
 ├── configs
+
 │ └── config.py # 모델 및 학습 설정
 │
+
 ├── utils
+
 │ ├── dataset.py # YOLO Dataset Loader
+
 │ └── heatmap.py # FOMO Heatmap 생성
+
 │
+
 ├── train.py # 모델 학습
+
 │
+
 ├── evaluate.py # Test 평가
+
 ├── validation_evaluate.py # Validation 평가
+
 │
+
 ├── quantize_model_PTQ.py # PTQ INT8 변환
+
 ├── quantize_model_QAT.py # QAT 학습
+
 ├── export_qat_int8.py # QAT → TFLite 변환
+
 │
+
 ├── evaluate_quantized.py
+
 └── validation_evaluate_quantized.py
 
 # INT8 모델 평가
@@ -74,11 +91,16 @@ FOMO_Local
 YOLO 형식 Dataset 사용
 
 dataset
+
 ├── train
+
 │ ├── images
+
 │ └── labels
 │
+
 ├── validation
+
 └── test
 
 ---
@@ -93,6 +115,7 @@ Float32 FOMO 모델 학습
 결과:
 
 checkpoints/
+
 └── best_fomo.keras
 
 ---
@@ -122,7 +145,9 @@ Test Dataset 평가
 ### PTQ
 
 Float Model
+
 ↓
+
 INT8 TFLite Model
 
 
@@ -133,15 +158,20 @@ quantize_model_PTQ.py
 ### QAT
 
 Float Model
+
 ↓
+
 QAT Fine Tuning
+
 ↓
+
 INT8 TFLite Model
 
 
 파일:
 
 quantize_model_QAT.py
+
 export_qat_int8.py
 
 ---
@@ -152,11 +182,17 @@ export_qat_int8.py
 AI Part:
 
 Dataset 생성
+
 ↓
+
 Model Training
+
 ↓
+
 Quantization
+
 ↓
+
 .tflite 생성
 
 
@@ -164,9 +200,13 @@ Quantization
 Embedded Part:
 
 TensorFlow Lite Model 전달
+
 ↓
+
 CubeIDE 적용
+
 ↓
+
 STM32 Build 및 실행
 
 ---
