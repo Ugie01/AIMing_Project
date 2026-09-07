@@ -6,7 +6,7 @@ AI 기반 목표 탐지 및 추적 시스템을 STM32H7 보드 위에서 구현�
 
 ## 🎬 Demo Video
 
-[![AIMing 프로젝트 데모 영상](https://img.youtube.com/vi/joX70CCl_hw/0.jpg)](https://www.youtube.com/watch?v=joX70CCl_hw)
+[![AIMing 프로젝트 데모 영상](https://img.youtube.com/vi/0Li_vKA1wIk/0.jpg)](https://www.youtube.com/watch?v=0Li_vKA1wIk)
 
 ## Project Overview
 
