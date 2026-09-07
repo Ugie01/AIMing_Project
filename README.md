@@ -4,6 +4,10 @@ AI 기반 목표 탐지 및 추적 시스템을 STM32H7 보드 위에서 구현�
 카메라 입력을 받아 경량화된 객체 탐지 모델로 타깃을 인식하고, 서보모터와 레이저 제어를 통해 실시간으로 추적 및 조준하는 흐름을 구성했습니다.
 본 프로젝트에서는 드론을 탐지하여 추적하는 모델을 사용하였습니다.
 
+## 🎬 Demo Video
+
+[![AIMing 프로젝트 데모 영상](https://img.youtube.com/vi/joX70CCl_hw/0.jpg)](https://www.youtube.com/watch?v=joX70CCl_hw)
+
 ## Project Overview
 
 이 프로젝트는 다음 3가지로 구성되어 있습니다.
