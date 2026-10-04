@@ -1,38 +1,58 @@
-# AIMing_Project
+# AIMing Project
 
-AI 기반 목표 탐지 및 추적 시스템을 STM32H7 보드 위에서 구현한 임베디드 프로젝트입니다.  
-카메라 입력을 받아 경량화된 객체 탐지 모델로 타깃을 인식하고, 서보모터와 레이저 제어를 통해 실시간으로 추적 및 조준하는 흐름을 구성했습니다.
-본 프로젝트에서는 드론을 탐지하여 추적하는 모델을 사용하였습니다.
+> **STM32H743 기반 On-Device AI 목표 탐지·추적 및 Pan/Tilt 조준 시스템**
 
-## 🎬 Demo Video
+카메라 영상을 STM32H7에서 처리하고, 경량 객체 탐지 모델을 통해 드론
+타깃을 인식한 뒤 Pan/Tilt 서보와 레이저를 제어하여 실시간 추적·조준하는
+임베디드 AI 프로젝트입니다.
 
-[![AIMing 프로젝트 데모 영상](https://img.youtube.com/vi/Eg0nYeOGCXA/0.jpg)](https://www.youtube.com/watch?v=Eg0nYeOGCXA)
+------------------------------------------------------------------------
 
-## Project Overview
+## 🎬 Demo
 
-이 프로젝트는 다음 3가지로 구성되어 있습니다.
+[![AIMing 프로젝트 데모
+영상](https://img.youtube.com/vi/Eg0nYeOGCXA/0.jpg)](https://www.youtube.com/watch?v=Eg0nYeOGCXA)
 
-- Embedded Firmware: STM32H743XIH6 기반의 실시간 제어와 하드웨어 인터페이스 구현
-- AI Vision: FOMO 기반 경량 모델을 이용한 실시간 객체 탐지
-- Simulation: 가상 환경에서 추적/조준 동작을 검증
+------------------------------------------------------------------------
 
----
+## 1. Project Overview
 
-## Key Highlights
+AIMing은 **Embedded Firmware / AI Vision / Simulation**을 하나의
+흐름으로 연결한 프로젝트입니다.
 
-- STM32H7 보드에서 카메라 입력 처리
-- Edge Impulse / TensorFlow Lite 기반 실시간 추론
-- 2축 서보 제어를 통한 Pan/Tilt 목표 추적
-- 레이저 조준 및 상태 머신 기반 동작 제어
-- FreeRTOS 기반 멀티태스크 실행
-- 모델 학습, 평가, 양자화, 배포까지 포함한 AI 파이프라인
-- PC 기반 성능 시험 자동화 및 결과 분석
+-   **Embedded Firmware**
+    -   STM32H743XIH6 기반 실시간 제어
+    -   OV2640 카메라 입력 처리
+    -   Pan/Tilt 서보 및 레이저 제어
+    -   LCD, ADC, PWM, UART 등 하드웨어 인터페이스
+    -   FreeRTOS 기반 멀티태스크 실행
+-   **AI Vision**
+    -   FOMO 기반 경량 객체 탐지
+    -   Edge Impulse / TensorFlow Lite 기반 추론
+    -   모델 학습, 평가, 양자화 및 TFLite Export
+-   **Simulation & Validation**
+    -   PC 환경에서 추적·조준 동작 시뮬레이션
+    -   AI 검출 성능 평가
+    -   하드웨어 PoC 시험
 
----
+------------------------------------------------------------------------
 
-## System Architecture
+## 2. Key Features
 
-```mermaid
+-   STM32H7에서 카메라 입력 및 AI 추론 파이프라인 구성
+-   FOMO 기반 드론 객체 탐지
+-   탐지 좌표를 이용한 2축 Pan/Tilt 타깃 추적
+-   레이저 출력 및 상태 머신 기반 동작 제어
+-   Joystick 기반 Manual Override
+-   FreeRTOS 기반 기능 분리
+-   모델 학습 → 평가 → 양자화 → 배포 흐름 구성
+-   AI 성능 시험과 하드웨어 PoC 시험 분리
+
+------------------------------------------------------------------------
+
+## 3. System Architecture
+
+``` mermaid
 flowchart TD
     CAM[OV2640 Camera] --> DCMI[DCMI / DMA Input]
     DCMI --> PRE[Image Preprocess]
@@ -41,122 +61,151 @@ flowchart TD
 
     JOY[Joystick] --> FSM[State Machine / Manual Override]
     CTRL --> FSM
+
     FSM --> PID[PID Controller]
     PID --> SERVO[Pan / Tilt Servo]
     PID --> LASER[Laser Output]
-    SERVO --> ACT[Mechanical Motion]
 
+    SERVO --> ACT[Mechanical Motion]
     FSM --> LCD[Display / UI Feedback]
     LCD --> USER[Operator / Debug View]
 ```
 
-이 구조는 카메라로부터 입력을 받아 AI로 판단하고, 그 결과를 제어 신호로 바꾸어 하드웨어를 구동하는 흐름을 보여줍니다.
+카메라 입력을 AI 모델이 분석하여 타깃 좌표를 생성하고, 상태 머신과 제어
+로직을 거쳐 Pan/Tilt 서보 및 레이저를 구동하는 구조입니다. Joystick
+입력을 이용한 수동 제어와 LCD 기반 상태 확인도 함께 구성했습니다.
 
----
+------------------------------------------------------------------------
 
-## Repository Structure
+## 4. Development Flow
 
-```text
-AIMing_Project/
-├── aiming_project/        # STM32H7 임베디드 펌웨어 프로젝트
-├── FOMO_Local/            # FOMO 모델 학습, 평가, 양자화 파이프라인
-├── PerformanceTest/       # AI 성능 테스트 및 하드웨어 PoC 도구
-├── Simul/                 # 시뮬레이션 및 시각화 코드
+``` text
+Camera Input
+    ↓
+Image Preprocess
+    ↓
+FOMO Object Detection
+    ↓
+Target Coordinate
+    ↓
+State Machine / Manual Override
+    ↓
+Tracking Control
+    ↓
+Pan / Tilt Servo + Laser
 ```
 
-### Directory Overview
+AI 모델 개발은 다음 흐름으로 구성되어 있습니다.
 
-- aiming_project
-  - STM32CubeIDE / CubeMX 기반 펌웨어 프로젝트
-  - 카메라, LCD, ADC, PWM, UART, FreeRTOS 관련 코드 포함
+``` text
+Dataset
+   ↓
+Training
+   ↓
+Evaluation / Validation
+   ↓
+PTQ / QAT Quantization
+   ↓
+TFLite Export
+   ↓
+Embedded Deployment / Performance Test
+```
 
-- FOMO_Local
-  - FOMO 모델 학습, 검증, 평가, 양자화, TFLite export 파이프라인
+------------------------------------------------------------------------
 
-- PerformanceTest
-  - AI 검출 성능과 하드웨어 PoC 시험을 위한 자동화 스크립트 모음
+## 5. Repository Structure
 
-- Simul
-  - 추적/조준 동작을 시뮬레이션하고 시각화하는 코드
+``` text
+AIMing_Project/
+├── aiming_project/        # STM32H7 임베디드 펌웨어
+├── FOMO_Local/            # FOMO 학습·평가·양자화 파이프라인
+├── PerformanceTest/       # AI 성능 평가 및 하드웨어 PoC
+├── Simul/                 # 추적·조준 시뮬레이션 및 시각화
+└── README.md
+```
 
----
+### `aiming_project/`
 
-## Development Workflow
+STM32CubeIDE / CubeMX 기반 펌웨어 프로젝트입니다.
 
-1. 임베디드 펌웨어 빌드 및 보드 실행
-2. AI 모델 학습 및 양자화 진행
-3. 성능 테스트로 모델 및 하드웨어 동작 검증
-4. 시뮬레이션 또는 실제 하드웨어에서 추적/조준 확인
+-   Camera
+-   LCD
+-   ADC
+-   PWM
+-   UART
+-   FreeRTOS
+-   Pan/Tilt Servo
+-   Laser Control
 
----
+### `FOMO_Local/`
 
-## Getting Started
+FOMO 모델 개발 파이프라인입니다.
 
-### 1. Firmware
+-   Training
+-   Evaluation
+-   Validation
+-   PTQ / QAT Quantization
+-   TFLite Export
 
-1. STM32CubeIDE 또는 VS Code 환경에서 [aiming_project](aiming_project) 폴더를 엽니다.
-2. [aiming_project/aiming_project.ioc](aiming_project/aiming_project.ioc) 파일을 확인합니다.
-3. 프로젝트를 빌드한 뒤 STM32H7 보드에 플래시합니다.
+### `PerformanceTest/`
 
-### 2. AI Model
+모델 및 하드웨어 검증을 위한 시험 코드입니다.
 
-1. [FOMO_Local](FOMO_Local) 폴더로 이동합니다.
-2. Python 환경을 준비한 뒤 필요한 패키지를 설치합니다.
-3. 학습 및 평가를 진행합니다.
-   - `python train.py`
-   - `python evaluate.py`
-   - `python validation_evaluate.py`
-4. 양자화 및 TFLite export를 진행합니다.
-   - `python quantize_model_PTQ.py`
-   - `python export_qat_int8.py`
+-   데이터셋 준비
+-   AI 검출 성능 평가
+-   하드웨어 PoC 시험
 
-### 3. Performance Test
+### `Simul/`
 
-1. [PerformanceTest](PerformanceTest) 폴더로 이동합니다.
-2. 데이터셋 준비:
-   - `python prepare_dataset.py`
-3. AI 성능 평가:
-   - `python ai_test.py`
-4. 하드웨어 PoC 시험:
-   - `python poc_test.py`
+추적 및 조준 동작을 PC 환경에서 확인하기 위한 시뮬레이션 코드입니다.
 
-### 4. Simulation
+------------------------------------------------------------------------
 
-1. [Simul](Simul) 폴더로 이동합니다.
-2. 시뮬레이션 스크립트를 실행해 동작을 확인합니다.
+## 6. Performance & Validation
 
----
+저장소는 AI 성능 평가와 하드웨어 PoC를 분리하여 검증할 수 있도록
+구성되어 있습니다.
 
-## Tech Stack
+``` bash
+cd PerformanceTest
 
-- MCU: STM32H743
-- RTOS: FreeRTOS
-- AI: TensorFlow / TensorFlow Lite / Edge Impulse
-- Languages: C / C++ / Python
-- Tools: STM32CubeIDE, VS Code
-
----
-
-## Project Highlights
-
-- 임베디드 환경에서 실시간 추론을 구현한 점
-- AI와 제어 로직을 실제 하드웨어에 연결한 점
-- 모델 성능 검증과 하드웨어 PoC를 분리해 실험한 점
-- 포트폴리오로 설명하기 좋은 end-to-end 구조를 갖춘 점
-
----
-
-## References
-
-- [aiming_project/README.md](aiming_project/README.md)
-- [FOMO_Local/README.md](FOMO_Local/README.md)
-- [PerformanceTest/README.md](PerformanceTest/README.md)
+python prepare_dataset.py
+python ai_test.py
+python poc_test.py
+```
 
 ---
 
-## Next Steps
+## 7. Team & Contributions
 
-- 하드웨어 구성 사진 추가
-- 실제 동작 영상 추가
-- 아키텍처 다이어그램 보강
-- 실행 방법과 결과 지표를 더 상세히 정리
+본 저장소는 **4인 팀 프로젝트의 공동 저장소**입니다.
+
+| 팀원 | 담당 영역 | 주요 구현 |
+| --- | --- | --- |
+| 이명욱 | Embedded / System Integration | 전체 코드 통합, OV2640 카메라 제어 및 STM32 시스템 연동 |
+| 양시영 | HMI / Performance Test | LCD HMI 구현, 성능 검증 항목 설계 및 테스트 프로그램 구현 |
+| 조병현 | Control / Simulation | PID 모터 제어, PyBullet 시뮬레이션 환경 구축 및 가상환경 테스트 |
+| 황은하 | AI Model | FOMO 기반 AI 모델 개발, 학습 데이터 구성 및 모델 최적화 |
+
+---
+
+## 8. Tech Stack
+
+| Category | Technology |
+| --- | --- |
+| MCU | STM32H743 |
+| RTOS | FreeRTOS |
+| AI | TensorFlow / TensorFlow Lite / Edge Impulse / FOMO |
+| Language | C / C++ / Python |
+| Simulation | PyBullet |
+| Tools | STM32CubeIDE / STM32CubeMX / VS Code |
+
+---
+
+## 9. References
+
+-   [`aiming_project/README.md`](aiming_project/README.md)
+-   [`FOMO_Local/README.md`](FOMO_Local/README.md)
+-   [`PerformanceTest/README.md`](PerformanceTest/README.md)
+
+각 파트의 세부 구현 및 시험 방법은 하위 README를 참고합니다.
